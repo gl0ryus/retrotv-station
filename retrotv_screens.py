@@ -18,8 +18,8 @@ import urllib.request
 
 from retrotv_cards import (
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, SHADOW_RED, SKY, W, WHITE,
-    YELLOW, ASSETS_DIR, Card, Script, circle, clip_text, clock, esc, fit, lavfi_url, music, rect, stripes,
-    text_width,
+    YELLOW, ASSETS_DIR, CHANNEL, Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look,
+    music, rect, text_width,
 )
 
 logger = logging.getLogger("RetroTV")
@@ -29,6 +29,7 @@ WORLD_MAP = os.path.join(ASSETS_DIR, "world_110m.json")  # Natural Earth 110m la
 USER_AGENT = "GL0RYUS-RetroTV/1.0 (personal hobby TV station)"
 SPACE_BACKGROUND = "0x060a1e"
 QUIZ_BACKGROUND = "0x1c0a36"
+QUIZ_BAND = "&H00481A30&"
 GREEN = "&H0040C050&"
 FLORIDA_LOCATIONS = (12, 27)  # Cape Canaveral SFS, Kennedy Space Center
 
@@ -84,20 +85,6 @@ def wrap(text, font, size, max_width, max_lines=3):
     return lines
 
 
-def info_header(s, d, kicker, title_pages, now, band="&H003C2818&"):
-    """Header band like the weather's: kicker, a title per page [(start, end, text)], ticking clock."""
-    fade = (300, 400)
-    s.shape(0, d, 0, 0, rect(W, 168), band, fade=fade, layer=1)
-    s.shape(0, d, 0, 168, rect(W, 6), "&H002C8AF0&", fade=fade, layer=1)
-    s.text(0, d, 80, 82, kicker, BARLOW_X, 30, MUSTARD, align=4, spacing=6, fade=fade)
-    for a, b, title in title_pages:
-        s.text(a, b, 80, 130, title, BARLOW_X, 56, YELLOW, align=4, shadow=3, shadow_color=BLACK, fade=(300, 300))
-    s.text(0, d, 944, 132, now.strftime("%a %b %-d").upper(), BARLOW_S, 32, SKY, align=6, fade=fade)
-    for sec in range(int(d) + 1):
-        t = now + datetime.timedelta(seconds=sec)
-        s.text(sec, min(d, sec + 1), 944, 88, clock(t), BARLOW_X, 44, WHITE, align=6, fade=None)
-
-
 def starfield(s, d, seed, top=0, count=80):
     rnd = random.Random(seed)
     for _ in range(count):
@@ -112,7 +99,92 @@ def starfield(s, d, seed, top=0, count=80):
                 extra=twinkle)
 
 
+# --- Holidays and heritage months ---
+
+# What fits a holiday or a heritage month (retro_station's HOLIDAYS, HOLIDAY_IDS and MONTHS): The Trivia API
+# tags to fetch questions from, the words a quiz question or a Wikipedia "on this day" entry has to mention
+# (tagged questions too, since a tag can be broader), and for births, what to look for in the person's page
+# summary when the words alone wouldn't find them. Few questions fit (a dozen or two a year per subject), so
+# Pop Quiz takes at most QUIZ_TOPIC_PER_DAY of them; Wikipedia has new entries for every date.
+BLACK_HISTORY = (r"african[- ]american|civil rights|segregat|slavery|enslaved|abolition|underground railroad|naacp|"
+                 r"emancipation|juneteenth|jim crow|harlem renaissance|tuskegee|negro leagues?|freedom riders?|"
+                 r"apartheid|mandela|martin luther king|rosa parks|harriet tubman|frederick douglass|malcolm x|"
+                 r"jackie robinson|thurgood marshall|sojourner truth|booker t\.|du bois|"
+                 r"black (?:american|panther|history|power)")
+SERVICE = (r"veterans?\b|memorial day|armistice|world war|medal of honor|arlington national cemetery|"
+             r"purple heart|\bu\.?s\.? (?:army|navy|marines?|air force)")
+TOPICS = {
+    "blackhistory": dict(tags=("civil_rights",), words=BLACK_HISTORY),
+    "mlkday": dict(tags=("civil_rights",), words=BLACK_HISTORY),
+    "juneteenth": dict(tags=("civil_rights",), words=BLACK_HISTORY),
+    "womenshistory": dict(tags=("women", "feminism"),
+                          words=r"women'?s (?:rights|suffrage|liberation|march|history)|suffrag|feminis|"
+                                r"first (?:woman|female)|\bfemale\b|empress|nineteenth amendment|19th amendment|"
+                                r"equal rights amendment|title ix",
+                          people=r"(?:^|\. )She\b"),
+    "hispanic": dict(tags=("mexico",),
+                     words=r"hispanic|latin[oa]s?\b|latin america|mexic|puerto ric|\bcuba\b|cuban[- ]american|"
+                           r"dominican republic|"
+                           r"colombia|venezuel|argentin|\bchile|\bperu\b|chican|el salvador|guatemal|honduras|"
+                           r"nicaragua|costa rica|panama|ecuador|bolivia|paraguay|uruguay|cesar chavez"),
+    "cincodemayo": dict(tags=("mexico",), words=r"mexic|puebla"),
+    "nativeamerican": dict(tags=("native_americans", "indigenous_people"),
+                           words=r"native american|first nations|indigenous|american indian|\btribes?\b|\btribal\b|"
+                                 r"cherokee|navajo|lakota|sioux|apache|comanche|iroquois|ojibwe|chippewa|\bhopi\b|"
+                                 r"pueblo|shoshone|seminole|mohawk|cheyenne|crazy horse|sitting bull|geronimo|"
+                                 r"sacagawea|pocahontas|wounded knee|little bighorn|trail of tears"),
+    "pride": dict(tags=("lgbtq",), words=r"\bgay\b|lesbian|\blgbt|transgender|bisexual|same-sex|stonewall|"
+                                         r"harvey milk|pride (?:march|parade)"),
+    "aapi": dict(tags=(), words=r"asian[- ]american|japanese[- ]american|chinese[- ]american|korean[- ]american|"
+                                r"filipino|vietnamese[- ]american|indian[- ]american|pacific islander|hawai|samoa|"
+                                r"\bguam\b|chinese exclusion|internment"),
+    "christmas": dict(tags=("christmas",), words=r"christmas|santa claus|reindeer|\bxmas\b"),
+    "halloween": dict(tags=("halloween",), words=r"hallowe'?en|vampire|dracula|frankenstein|haunted|witch(?:es)?\b|"
+                                                 r"zombie|ghost|horror"),
+    "thanksgiving": dict(tags=(), words=r"thanksgiving|pilgrims?\b|mayflower|plymouth colony"),
+    "valentines": dict(tags=(), words=r"valentine"),
+    "stpatricks": dict(tags=(), words=r"st\.? patrick|\bireland\b|\birish\b"),
+    "easter": dict(tags=(), words=r"\beaster\b"),
+    "july4": dict(tags=(), words=r"declaration of independence|independence day|founding fathers?|"
+                                 r"american revolution|continental congress|\b1776\b"),
+    "newyearsday": dict(tags=(), words=r"new year"),
+    "mardigras": dict(tags=("mardi_gras",), words=r"mardi gras|new orleans|carnival"),
+    "memorialday": dict(tags=(), words=SERVICE),
+    "veteransday": dict(tags=(), words=SERVICE),
+    "laborday": dict(tags=(), words=r"labor (?:union|day|movement)|trade union|\bstrikes?\b|workers"),
+    "groundhog": dict(tags=(), words=r"groundhog|punxsutawney"),
+    "aprilfools": dict(tags=(), words=r"april fool|\bhoax|prank"),
+}
+TRIVIA_API = "https://the-trivia-api.com/v2/questions"   # CC BY-NC 4.0: free for a hobby station, with a credit
+
+
+def topic_of(season, month):
+    """The subject Pop Quiz and Today in History lean toward: the holiday's, or else the month's."""
+    return season if season in TOPICS else month if month in TOPICS else None
+
+
+def _fits(topic, *texts):
+    return bool(re.search(TOPICS[topic]["words"], " ".join(t for t in texts if t), re.I))
+
+
+def _trivia_api(tag):
+    """Questions with a tag from The Trivia API, in the Open Trivia DB's shape. Cached for a week."""
+    data = fetch_json(f"trivia-api-{tag}", f"{TRIVIA_API}?limit=50&tags={tag}", max_age_minutes=7 * 24 * 60,
+                      stale_hours=60 * 24)
+    out = []
+    for q in data if isinstance(data, list) else []:
+        try:
+            out.append({"question": q["question"]["text"], "correct_answer": q["correctAnswer"],
+                        "incorrect_answers": list(q["incorrectAnswers"][:3]), "category": q.get("category", ""),
+                        "key": f"tta-{q['id']}", "source": "The Trivia API"})
+        except (KeyError, TypeError):
+            continue
+    return out
+
+
 # --- Pop Quiz ---
+
+QUIZ_TOPIC_PER_DAY = 1   # questions a day on the holiday's or heritage month's subject, while unused ones last
 
 # Every Open Trivia DB category, with the short name shown on screen
 QUIZ_CATEGORIES = {9: "General Knowledge", 10: "Books", 11: "Movies", 12: "Music", 13: "Musicals", 14: "Television",
@@ -184,9 +256,33 @@ def _refresh_bank():
         logger.warning(f"Quiz bank download failed: {e}")
 
 
-def _next_question():
-    """The next question off a shuffled deck of the whole bank. Every question airs once before
-    any repeats; when the deck runs out it's reshuffled and starts over."""
+def _topic_question(topic, bank, state):
+    """A question on the topic not yet asked this year (from its Trivia API tags and the bank), recorded in
+    state, or None when today's QUIZ_TOPIC_PER_DAY are done or none are left."""
+    today = datetime.date.today()
+    day, count = state.get("topic_day", {}).get(topic, ("", 0))
+    if day == today.isoformat() and count >= QUIZ_TOPIC_PER_DAY:
+        return None
+    asked = state.get("topics_asked", {})
+    asked = {k: v for k, v in asked.items() if k.endswith(f"-{today.year}")}   # the topics come round once a year
+    used = set(asked.get(f"{topic}-{today.year}", []))
+    pool = {q["key"]: q for tag in TOPICS[topic]["tags"] for q in _trivia_api(tag)}
+    pool.update(bank)
+    fits = [q for k, q in pool.items() if k not in used and _fits(topic, q["question"], q["correct_answer"])]
+    if not fits:
+        return None
+    q = random.choice(fits)
+    asked[f"{topic}-{today.year}"] = sorted(used | {q["key"]})
+    state["topics_asked"] = asked
+    state.setdefault("topic_day", {})[topic] = (today.isoformat(), count + 1 if day == today.isoformat() else 1)
+    logger.info(f"Quiz: a {topic} question ({len(fits) - 1} more left this year)")
+    return dict(q, topic=topic)
+
+
+def _next_question(topic=None):
+    """The next question off a shuffled deck of the whole bank, or now and then one on the topic (see
+    TOPICS). Every question airs once before any repeats; when the deck runs out it's reshuffled and
+    starts over."""
     global _bank_thread
     os.makedirs(DATA_DIR, exist_ok=True)
     try:
@@ -198,40 +294,47 @@ def _next_question():
     if time.time() - built > QUIZ_BANK_DAYS * 86400 and not (_bank_thread and _bank_thread.is_alive()):
         _bank_thread = threading.Thread(target=_refresh_bank, daemon=True)
         _bank_thread.start()
-    if not bank:
-        return None
     try:
         with open(QUIZ_FILE) as f:
-            deck = json.load(f).get("deck", [])
-    except (OSError, ValueError, AttributeError):
-        deck = []
-    deck = [k for k in deck if k in bank]  # a rebuilt bank may have dropped some
-    if not deck:
-        deck = list(bank)
-        random.shuffle(deck)
-        logger.info(f"Quiz: dealing a fresh deck of {len(deck)} questions")
-    q = bank[deck.pop()]
-    _write_json(QUIZ_FILE, {"deck": deck})
+            state = json.load(f)
+        if not isinstance(state, dict):
+            state = {}
+    except (OSError, ValueError):
+        state = {}
+    q = _topic_question(topic, bank, state) if topic else None
+    if not q:
+        if not bank:
+            return None
+        deck = [k for k in state.get("deck", []) if k in bank]  # a rebuilt bank may have dropped some
+        if not deck:
+            deck = list(bank)
+            random.shuffle(deck)
+            logger.info(f"Quiz: dealing a fresh deck of {len(deck)} questions")
+        q = bank[deck.pop()]
+        state["deck"] = deck
+    _write_json(QUIZ_FILE, state)
     return q
 
 
-def pop_quiz():
-    """Game-show trivia: question, four answers, a 20-second countdown, then the reveal at 22 s."""
-    q = _next_question()
+def pop_quiz(season=None, month=None):
+    """Game-show trivia: question, four answers, a 20-second countdown, then the reveal at 22 s. Now and then
+    the question is on the holiday's or heritage month's subject, and the title says so."""
+    q = _next_question(topic_of(season, month))
     if not q:
         return None
     d, start, reveal = 33.0, 2.0, 22.0   # quiz_bed.ogg is cut to these times
     answers = q["incorrect_answers"][:3] + [q["correct_answer"]]
     random.shuffle(answers)
     correct = answers.index(q["correct_answer"])
-    category = QUIZ_CATEGORIES.get(q.get("category_id"), q["category"].split(": ")[-1])
+    if q.get("topic"):
+        category = look(q["topic"]).title
+    else:
+        category = QUIZ_CATEGORIES.get(q.get("category_id"), q["category"].split(": ")[-1])
     out = (300, 400)
     s = Script()
 
-    s.text(0, d, 80, 88, "POP QUIZ", ARCHIVO, 66, align=4, shadow=6, slant=-0.15, fade=out)
-    stripes(s, 0, d, 430, 70, 330)
-    s.text(0.2, d, 84, 142, category.upper(), BARLOW_X, 32, MUSTARD, align=4, spacing=4, fade=out)
-    # Countdown dial
+    info_header(s, d, [(0, d, f"Pop Quiz · {category}")], None, band=QUIZ_BAND, season=season, ticking=False)
+    # Countdown dial, where the other screens have their clock
     s.shape(0, d, 900 - 50, 96 - 50, circle(50), MUSTARD, fade=out, layer=1)
     s.shape(0, d, 900 - 44, 96 - 44, circle(44), "&H00360A1C&", fade=out, layer=2)
     count = int(reveal - start)
@@ -274,6 +377,9 @@ def pop_quiz():
             asize = 32
         s.raw(t_in, d, f"\\an4\\pos({x + 88},{y + 45})\\fn{BARLOW_B}\\fs{asize}\\c{WHITE}\\bord0\\shad1"
                        f"\\4c{BLACK}\\fad(300,400)", "\\N".join(esc(l) for l in alines), layer=5)
+    if q.get("source"):   # the credit its licence asks for
+        s.text(0.8, d, 512, 572, f"QUESTION FROM {q['source'].upper()}", BARLOW_B, 24, "&H00B0A8B8&", spacing=1,
+               fade=out, layer=3)
     return Card(lavfi_url(s.write("quiz"), d, music("quiz_bed.ogg"), background=QUIZ_BACKGROUND), d, "quiz")
 
 
@@ -283,43 +389,65 @@ BIRTH_WORDS = re.compile(r"\b(actor|actress|singer|musician|comedian|director|ra
                          r"astronaut|player|wrestler|host|author|inventor|businessman|businesswoman|guitarist)\b")
 
 
-def _history_picks(data, rnd):
+def _summary(entry):
+    """The first page's description and summary for an "on this day" entry: more to match a topic against."""
+    page = (entry.get("pages") or [{}])[0]
+    return f"{page.get('description', '')} {page.get('extract', '')}"
+
+
+def _history_picks(data, rnd, topic=None):
+    """(events, births, on topic): three events and up to four births, at most two of each that fit the topic
+    (see TOPICS) when there are any, the rest picked as on any other day."""
     def clean(text):
         return re.sub(r"\s*\((?:pictured|shown|depicted)[^)]*\)", "", text).strip()
-    years, events = set(), []
+    years, events, fitting = set(), [], []
     for e in data.get("selected", []) + data.get("events", []):
         text = clean(e.get("text", ""))
         # One event per year: "selected" and "events" often tell the same story twice
         if e.get("year") and 30 <= len(text) <= 150 and e["year"] not in years:
             years.add(e["year"])
             events.append((int(e["year"]), text))
-    # Lean towards the TV years, but keep one from anywhere
-    tv_era = [e for e in events if 1950 <= e[0] <= 2012]
+            if topic and _fits(topic, text, _summary(e)):
+                fitting.append(events[-1])
+    rnd.shuffle(fitting)
+    picked = fitting[:2]
+    # Otherwise lean towards the TV years, but keep one from anywhere
+    tv_era = [e for e in events if 1950 <= e[0] <= 2012 and e not in picked]
     rnd.shuffle(tv_era)
-    rest = [e for e in events if e not in tv_era[:2]]
+    tv_era = tv_era[:max(0, 2 - len(picked))]
+    rest = [e for e in events if e not in picked and e not in tv_era]
     rnd.shuffle(rest)
-    chosen = sorted(tv_era[:2] + rest[:3 - len(tv_era[:2])])
+    chosen = sorted(picked + tv_era + rest[:3 - len(picked) - len(tv_era)])
 
-    births = []
+    people = TOPICS.get(topic, {}).get("people")
+    births, matches = [], []
     for b in data.get("births", []):
         text = b.get("text", "")
-        if b.get("year") and 1900 <= int(b["year"]) <= 1995 and ", " in text and BIRTH_WORDS.search(text):
-            name, what = text.split(", ", 1)
-            # A page photo is a rough sign of someone people have heard of
-            pictured = any(p.get("thumbnail") for p in b.get("pages", [])[:1])
-            births.append((int(b["year"]), name, what, ("American" in what) + pictured))
-    rnd.shuffle(births)
-    births.sort(key=lambda b: -b[3])
-    born = sorted(births[:4])
-    return chosen, born
+        if not (b.get("year") and ", " in text):
+            continue
+        year, (name, what) = int(b["year"]), text.split(", ", 1)
+        # A page photo is a rough sign of someone people have heard of
+        pictured = any(p.get("thumbnail") for p in b.get("pages", [])[:1])
+        if topic and 1800 <= year <= 2000 and (re.search(people, _summary(b)) if people else _fits(topic, text, _summary(b))):
+            matches.append((year, name, what, 2 + pictured))
+        elif 1900 <= year <= 1995 and BIRTH_WORDS.search(text):
+            births.append((year, name, what, ("American" in what) + pictured))
+    for group in (matches, births):
+        rnd.shuffle(group)
+        group.sort(key=lambda b: -b[3])
+    born = sorted(matches[:2] + births[:4 - len(matches[:2])])
+    return chosen, born, bool(picked or matches)
 
 
-def today_in_history(now):
+def today_in_history(now, season=None, month=None):
+    """Three events and four births from Wikipedia's "on this day", leaning toward the holiday's or heritage
+    month's subject when the day has something on it, and saying so in the header."""
     data = fetch_json(f"history-{now:%m%d}", "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/all/"
                       f"{now:%m}/{now:%d}", max_age_minutes=24 * 60, stale_hours=20)
     if not data:
         return None
-    events, born = _history_picks(data, random.Random())
+    topic = topic_of(season, month)
+    events, born, on_topic = _history_picks(data, random.Random(), topic)
     if not events:
         return None
     page = 24.0
@@ -329,7 +457,8 @@ def today_in_history(now):
     pages = [(0, page, f"Today in History · {date}")]
     if born:
         pages.append((page, d, f"Born on {date}"))
-    info_header(s, d, "GL0RYUS NETWORK", pages, now, band="&H0018283C&")
+    kicker = f"{CHANNEL} · {look(topic).title.upper()}" if on_topic else CHANNEL
+    info_header(s, d, pages, now, band="&H0018283C&", kicker=kicker, season=season)
     fade = (300, 300)
     for i, (year, text) in enumerate(events):
         y = 238 + i * 108
@@ -391,7 +520,7 @@ def _when(launch, short=False):
     return net.strftime("%b %-d").upper() if short else f"{net:%a %b %-d}".upper() + f" · {clock(net)}"
 
 
-def launch_watch(now):
+def launch_watch(now, season=None):
     base = "https://ll.thespacedevs.com/2.3.0/launches/upcoming/?mode=normal"
     world = fetch_json("launches-world", f"{base}&limit=10", max_age_minutes=180)
     florida = fetch_json("launches-florida", f"{base}&limit=4&ordering=net&location__ids=12,27", max_age_minutes=180)
@@ -409,7 +538,7 @@ def launch_watch(now):
     d = 32.0
     s = Script()
     starfield(s, d, seed=int(now.timestamp()) // 3600, top=168)
-    info_header(s, d, "GL0RYUS NETWORK", [(0, d, "Launch Watch")], now, band="&H00301408&")
+    info_header(s, d, [(0, d, "Launch Watch")], now, band="&H00301408&", season=season)
     fade = (300, 400)
     s.text(0.2, d, 80, 204, "NEXT LAUNCH", BARLOW_X, 28, MUSTARD, align=4, spacing=6, fade=fade, layer=3)
     mission = clip_text(featured["mission"], 34)
@@ -503,7 +632,7 @@ def _chart_paths(history):
     return area, ribbon
 
 
-def markets(now):
+def markets(now, season=None):
     """BTC, ETH and the S&P 500: price, change and a chart of the last 24 hours (the S&P's session so far,
     from the previous close). None when no quote is available at all."""
     # Whole dollars and points: cents are noise at TV resolution and only shrink the numbers
@@ -516,7 +645,7 @@ def markets(now):
         return None
     d = 24.0
     s = Script()
-    info_header(s, d, "GL0RYUS NETWORK", [(0, d, "Markets")], now, band="&H00142410&")
+    info_header(s, d, [(0, d, "Markets")], now, band="&H00142410&", season=season)
     fade = (300, 400)
     s.text(0.2, d, 320, 206, "LAST 24 HOURS", BARLOW_X, 30, MUSTARD, align=4, spacing=4, fade=fade, layer=3)
     s.text(0.2, d, 944, 206, "CHANGE", BARLOW_X, 30, MUSTARD, align=6, spacing=4, fade=fade, layer=3)
@@ -597,7 +726,7 @@ def _night_path(solar_lat, solar_lon):
     return "m " + " l ".join(f"{x:.0f} {y:.0f}" for x, y in pts)
 
 
-def whos_in_space(now):
+def whos_in_space(now, season=None):
     crew = fetch_json("astronauts", "https://ll.thespacedevs.com/2.3.0/astronauts/?in_space=true&limit=40"
                       "&mode=normal", max_age_minutes=360, stale_hours=72)
     people = [a for a in (crew or {}).get("results", []) if (a.get("type") or {}).get("name") != "Non-Human"]
@@ -610,7 +739,7 @@ def whos_in_space(now):
     s = Script()
     starfield(s, d, seed=int(now.timestamp()) // 3600 + 7, top=168)
     pages = [(0, page, "Who's in Space")] + ([(page, d, "Where's the ISS?")] if current else [])
-    info_header(s, d, "GL0RYUS NETWORK", pages, now, band="&H00301408&")
+    info_header(s, d, pages, now, band="&H00301408&", season=season)
     fade = (300, 300)
 
     # Page 1: the crews. Chinese astronauts are on Tiangong; everyone else is on the ISS

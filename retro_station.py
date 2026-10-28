@@ -183,11 +183,35 @@ HOLIDAYS = {
     "christmas": ((12, 1), (12, 25)),
     "thanksgiving": (("thanksgiving", -6), ("thanksgiving", 3)),  # the Friday before to the Sunday after
 }
-# Days the station ID dresses up for without a season of programming (there isn't enough of it)
+# Days the station ID and the cards dress up for without a season of programming (there isn't enough of it).
+# On its day one of these wins over a season (Mardi Gras in Valentine's week), and the first match wins
+# among them (Easter over an April Fools' Day Easter, Juneteenth over a Father's Day on June 19)
 HOLIDAY_IDS = {
+    "newyearsday": ((1, 1), (1, 1)),
+    "mlkday": (("mlkday", 0), ("mlkday", 0)),
+    "groundhog": ((2, 2), (2, 2)),
+    "mardigras": (("easter", -47), ("easter", -47)),
     "stpatricks": ((3, 17), (3, 17)),
     "easter": (("easter", 0), ("easter", 0)),
+    "aprilfools": ((4, 1), (4, 1)),
+    "cincodemayo": ((5, 5), (5, 5)),
+    "mothersday": (("mothersday", 0), ("mothersday", 0)),
+    "memorialday": (("memorialday", 0), ("memorialday", 0)),
+    "juneteenth": ((6, 19), (6, 19)),
+    "fathersday": (("fathersday", 0), ("fathersday", 0)),
     "july4": ((7, 4), (7, 4)),
+    "laborday": (("laborday", 0), ("laborday", 0)),
+    "veteransday": ((11, 11), (11, 11)),
+}
+# Heritage months: (first, last) as (month, day). Kept subtle on screen (see retrotv_cards.MONTH_LOOKS), and
+# Today in History and Pop Quiz lean toward them (retrotv_screens.TOPICS)
+MONTHS = {
+    "blackhistory": ((2, 1), (2, 29)),
+    "womenshistory": ((3, 1), (3, 31)),
+    "aapi": ((5, 1), (5, 31)),
+    "pride": ((6, 1), (6, 30)),
+    "hispanic": ((9, 15), (10, 15)),
+    "nativeamerican": ((11, 1), (11, 30)),
 }
 # Heads-ups in the breaks before days you're expected to get someone something or spend time with them:
 # the "reminder" special, from REMINDER_DAYS ahead through the day itself
@@ -259,7 +283,7 @@ REMOTE_STATE_FILE = os.path.join(HOME_DIR, "retrotv_remote.json")
 # The remote's TV guide: the main channel on top, then make-believe channels filled from the cached shows.
 # Picking a show on one plays it right away ("changing the channel"); when it ends the set goes back to the
 # main channel and joins whatever it has on by then. (number, name, kind); "season" only shows in season
-MAIN_CHANNEL = (3, "G|TV")
+MAIN_CHANNEL = (3, cards.CHANNEL)
 CHANNELS = [
     (4, "TOON TOWN", "kids"),
     (5, "G4", "g4"),
@@ -465,6 +489,9 @@ FLOATING_DAYS = {
     "thanksgiving": lambda year: nth_weekday(year, 11, 3, 4),  # fourth Thursday in November
     "mothersday": lambda year: nth_weekday(year, 5, 6, 2),     # second Sunday in May
     "fathersday": lambda year: nth_weekday(year, 6, 6, 3),     # third Sunday in June
+    "mlkday": lambda year: nth_weekday(year, 1, 0, 3),         # third Monday in January
+    "memorialday": lambda year: nth_weekday(year, 6, 0, 1) - td(days=7),  # last Monday in May
+    "laborday": lambda year: nth_weekday(year, 9, 0, 1),       # first Monday in September
 }
 
 
@@ -484,8 +511,13 @@ def holiday_season(day, holidays=None):
 
 
 def holiday_look(day):
-    """How the station ID dresses up today: the season's look, or a one-day holiday's."""
-    return holiday_season(day) or holiday_season(day, HOLIDAY_IDS)
+    """How the station ID and the cards dress up today: a holiday day's look, or the season's."""
+    return holiday_season(day, HOLIDAY_IDS) or holiday_season(day)
+
+
+def heritage_month(day):
+    """The heritage month (MONTHS) a day falls in, or None."""
+    return next((name for name, (first, last) in MONTHS.items() if first <= (day.month, day.day) <= last), None)
 
 
 def next_reminder(day):
@@ -2408,7 +2440,7 @@ class Station:
         show = self.lineup.next_show(start)
         if not show:
             logger.warning("Nothing cached to play, standing by.")
-            self.emit(self.card(cards.stand_by(), "standby"))
+            self.emit(self.card(cards.stand_by(holiday_look(start.date())), "standby"))
             return
         self.on_air = True
         ON_AIR.set()
@@ -2422,7 +2454,7 @@ class Station:
             anthem = events.anthem() if ANTHEM else None
             if anthem:
                 self.emit(self.card(anthem, "anthem"))
-            self.emit(self.card(cards.sign_off(signon)))
+            self.emit(self.card(cards.sign_off(signon, holiday_look(t.date()))))
             t = self.eta()
             until = signon - td(seconds=lead)
             if OFF_AIR_LOOP_MINUTES is not None:
@@ -2450,7 +2482,7 @@ class Station:
     def lottery_card(self, when):
         self.lottery_day = broadcast_date(when)
         logger.info("Tonight's lottery drawing is on.")
-        return self.card(events.lottery(when), "lottery")
+        return self.card(events.lottery(when, holiday_look(when.date())), "lottery")
 
     # --- Breaks ---
 
@@ -2518,8 +2550,9 @@ class Station:
 
     def mid_break(self, show):
         when = self.eta()
-        right_back = self.card(cards.right_back())
-        back = self.card(cards.back_to(show.name))
+        season = holiday_look(when.date())
+        right_back = self.card(cards.right_back(season or heritage_month(when.date())))
+        back = self.card(cards.back_to(show.name, season))
         budget = show.mid_target - right_back.duration - back.duration - 2 * STATIC_SECONDS
         extra = []
         if self.remaining_lottery(when):
@@ -2589,7 +2622,8 @@ class Station:
             d = (target - self.eta()).total_seconds() - STATIC_SECONDS
             d = min(UP_NEXT_SECONDS[1], max(UP_NEXT_SECONDS[0], d))
             card = cards.up_next((nxt.name, nxt.episode), (later.name, later.episode) if later else None,
-                                 round_time(later.start) if later else None, duration=d)
+                                 round_time(later.start) if later else None, duration=d,
+                                 season=holiday_look(target.date()))
             if not self.emit(self.card(card)):
                 return
         if new_year:
@@ -2617,24 +2651,25 @@ class Station:
         return None
 
     def build_special(self, kind, airs_at, first_start):
+        season, month = holiday_look(airs_at.date()), heritage_month(airs_at.date())
         if kind == "guide":
-            return cards.guide(self.guide_rows(first_start), airs_at)
+            return cards.guide(self.guide_rows(first_start), airs_at, season)
         if kind == "weather":
             data = cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ)
-            return cards.weather(data, WEATHER_PLACE, airs_at) if data else None
+            return cards.weather(data, WEATHER_PLACE, airs_at, season) if data else None
         if kind == "quiz":
-            return screens.pop_quiz()
+            return screens.pop_quiz(season, month)
         if kind == "history":
-            return screens.today_in_history(airs_at)
+            return screens.today_in_history(airs_at, season, month)
         if kind == "launch":
-            return screens.launch_watch(airs_at)
+            return screens.launch_watch(airs_at, season)
         if kind == "space":
-            return screens.whos_in_space(airs_at)
+            return screens.whos_in_space(airs_at, season)
         if kind == "markets":
-            return screens.markets(airs_at)
+            return screens.markets(airs_at, season)
         if kind == "reminder":
             upcoming = next_reminder(airs_at.date())
-            return events.reminder(*upcoming, airs_at) if upcoming else None
+            return events.reminder(*upcoming, airs_at, season) if upcoming else None
         return None
 
     def guide_rows(self, first_start):
@@ -2660,7 +2695,7 @@ class Station:
             self._open(t)
         if show.marathon_intro and not join:
             key = marathon_series(broadcast_date(t), self.cache.indexer)
-            season = holiday_season(t.date())
+            season = holiday_look(t.date())
             self.emit(self.card(events.marathon(show.marathon, show.name, t, season)))
             logger.info(f"{show.marathon}: {show.name} ({key})")
 
@@ -2708,7 +2743,8 @@ class Station:
         show of the day, or off the grid once an hour), otherwise the bumper."""
         hour = (t.date(), t.hour)
         if self.good_morning or (t.minute == 0 if on_grid(t) else hour != self.last_id_hour):
-            self.emit(self.card(events.station_id(t, self.good_morning, holiday_look(t.date()))))
+            self.emit(self.card(events.station_id(t, self.good_morning, holiday_look(t.date()),
+                                                  heritage_month(t.date()))))
             self.last_id_hour = hour
             self.good_morning = False
         elif BUMPER_FILE and os.path.exists(BUMPER_FILE):
@@ -3009,7 +3045,7 @@ class Station:
         if resume and resume[0] is self.interrupted:
             self.interrupted = None
             show, position = resume
-            self.emit(self.card(cards.back_to(show.name)))
+            self.emit(self.card(cards.back_to(show.name, holiday_look(datetime.date.today()))))
             point = self.act_at(show, position)
             if point:
                 self.air(show, join=point)
