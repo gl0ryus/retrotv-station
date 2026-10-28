@@ -1,0 +1,123 @@
+# Our own lines for the text bumps (retrotv_blurbs.py), mixed in with facts and jokes from the APIs.
+#
+# One bump per line. " / " splits a line into beats that come up one after another. A section header names
+# the line shown first (the kicker) and the earliest level its lines can air at:
+#   clean    any time, the kids' hours too
+#   cheeky   from BLURB_CHEEKY_HOUR (9 PM)
+#   raunchy  from BLURB_RAUNCHY_HOUR (11 PM) to sign-off. Crude is fine, hateful never.
+# Everything shows in lowercase on screen. Lines starting with # are ignored. Add your own any time.
+
+[food for thought | clean]
+the static between channels / is the loudest quiet there is.
+somewhere a vcr is still blinking 12:00. / it's been right twice a day for thirty years.
+every rerun / was somebody's first time.
+a mixtape was a playlist / you had to sit through to make.
+your parents were the cool kids once. / somebody else's parents worried about them.
+"be kind, rewind." / still good advice.
+dinner on a tv tray / tastes better than it has any right to.
+the commercials were the only part / that knew exactly how long they were.
+saturday mornings felt longer / because you got up earlier for them.
+the sun is a space heater / you can't turn down.
+cereal is cold soup / with a better marketing team.
+a sandwich cut diagonally / tastes like somebody loves you.
+the moon has seen every sitcom / through somebody's window.
+every playground had one swing / that everybody wanted.
+you're the only person / who hears your voice from the inside.
+old phone numbers / are memories you can still dial.
+a snow day was the school's way / of saying sorry.
+a test pattern / is a screen waiting for its cue.
+your oldest t-shirt / has outlasted a few relationships.
+every song on the radio / is somebody's song.
+popcorn is corn / that couldn't keep it together.
+a hammock is a bed / that gave up on rules.
+echoes are sounds / that didn't want to leave yet.
+clouds are just water / taking the scenic route.
+a power outage is the house / telling everybody to talk to each other.
+nobody in the 80s / thought the 80s were retro.
+the remote control / was the first thing every family fought over.
+a lighthouse is a nightlight / for the whole ocean.
+the deep end of the pool / was the scariest place on earth / until you were nine.
+the best seat on the couch / is a matter of public record.
+a calculator spelling words upside down / was the first text message.
+the ice cream truck song / could be heard through walls, doors and parents.
+the light from most of the stars you see tonight / left them before tv was invented.
+
+[ain't that interesting? | clean]
+a group of flamingos / is called a flamboyance.
+octopuses have three hearts.
+bananas are berries. / strawberries aren't.
+the eiffel tower grows a few inches / in the summer heat.
+wombat droppings / are cube-shaped.
+the first music video on mtv / was "video killed the radio star."
+the first tv remote, in 1950, / was attached to the set by a cable.
+a day on venus / is longer than a year on venus.
+scotland's national animal / is the unicorn.
+the dot over a lowercase i / is called a tittle.
+the shortest war on record / lasted under an hour.
+peanuts aren't nuts. / they're legumes.
+there are more possible games of chess / than atoms in the observable universe.
+the first thing ever scanned with a barcode / was a pack of gum.
+the fruit was called orange / before the color was.
+footprints on the moon / could last millions of years.
+sea otters hold hands when they sleep / so they don't drift apart.
+
+[food for thought | cheeky]
+if you're still up past nine, / the kids are asleep / and so is your diet.
+every couch has one cushion / that has seen things.
+a slow dance / is a hug with a soundtrack.
+the snooze button / is the most honest relationship you'll ever have.
+leftover pizza after midnight / doesn't count. / those are the rules.
+the vcr in the bedroom / had a very specific job.
+late-night infomercials / always know where the lonely people are.
+the mute button / was invented for in-laws.
+every bad decision / starts with "one more episode."
+a nightcap / is a bedtime story for grown-ups.
+couples who share one blanket / are just fighting slower.
+your thermostat and your partner / have never agreed on anything.
+the midnight snack / is a contract between you and nobody.
+
+[food for thought | raunchy]
+it's after eleven. / if your pants are still on, / what are you doing with your life?
+a waterbed / is a mattress that wants to get involved.
+the bedroom tv / has seen things it can't unsee.
+your browser history / is the most honest autobiography you'll ever write.
+every "quick nap" with somebody else in the bed / is a lie.
+if that couch could talk / you'd have to move.
+"i'm not that drunk." / - a man about to be exactly that drunk.
+the walk of shame / is just cardio with a story.
+some of y'all are watching this / with somebody you shouldn't be.
+the safest sex / is falling asleep during the movie.
+nothing good happens after 2 a.m. / lucky for you, / we sign off at 2.
+lingerie / is gift wrap for grown-ups.
+your neighbors heard that. / all of it.
+the "just one drink" plan / has never worked. / not once. / in history.
+a booty call / is a drive-thru order / for feelings.
+
+[real talk | cheeky]
+nobody has ever looked cool / carrying a full laundry basket.
+your phone's at 3%. / honestly, same.
+the gym is open right now. / lol.
+that leftover chinese food. / how long, exactly?
+it's a school night. / we won't tell.
+the dishes in the sink / are a cry for help. / from the dishes.
+nobody reads the terms and conditions. / that's how they get you.
+damn, it's late. / and you're still here. / respect.
+you said "five more minutes" / an hour ago. / we saw.
+your plants are judging you. / water them.
+
+[real talk | raunchy]
+it's past eleven. / put the phone down / and go fuck somebody. / or sleep. / either way.
+nobody has ever said / "i'm glad i stayed up for this." / including us.
+your ex is watching this too. / probably. / don't text them.
+the bar closes in an hour. / your standards close in thirty minutes.
+you're not tired. / you're just out of shit to do.
+some people are asleep right now. / suckers.
+drunk you thinks you can dance. / sober you knows the fucking truth.
+if you're watching this sober, / we're proud of you. / and also sorry.
+the fridge light / has seen you at your lowest.
+"i'll just have one." / - the last words of your entire weekend.
+your bed misses you. / your liver misses you more.
+calories don't count after midnight. / neither do bad decisions. / neither do texts. / (they do.)
+the sun's coming up in a few hours / and you've done absolutely fuck all.
+nobody looks good / in the light of an open fridge at 1 a.m.
+quit flipping channels. / you won't find anything better. / we checked.

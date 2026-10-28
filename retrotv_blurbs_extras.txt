@@ -1,0 +1,72 @@
+# Extra flavour for the text bumps (retrotv_blurbs.py). Same format as retrotv_blurbs.txt, two kinds of section:
+#
+#   [reactions | level]     a closing beat, said back at a fact or joke now and then ("ok but who asked?")
+#   [fact kickers | level]  what a fact from the API opens with ("did you know?")
+#
+# Levels as in retrotv_blurbs.txt: clean any time (the kids' hours too), cheeky from 9 PM, raunchy from 11 PM.
+# Cursing and vulgar are fine at cheeky and raunchy; hateful never.
+
+[reactions | clean]
+neat.
+huh.
+wild.
+ok but who asked?
+blah blah blah.
+cool story.
+anyway.
+you're welcome.
+noted.
+riveting.
+fascinating. / not really.
+moving on.
+tell your friends.
+write that down.
+mind. blown.
+huh. who knew.
+and that's the news.
+
+[reactions | cheeky]
+damn, that's crazy.
+damn.
+well, damn.
+the hell?
+who gives a damn.
+crazy. anyway.
+nobody cares, but ok.
+cool. cool cool cool.
+that's a lot of words for this late.
+ok but who asked? / seriously. / who?
+blah blah blah. / go to bed.
+
+[reactions | raunchy]
+holy shit.
+no fucking way.
+the fuck?
+well, shit.
+that's some bullshit.
+who gives a shit.
+fuck me, that's crazy.
+ok but who the fuck asked?
+blah blah fucking blah.
+cool story. / now go to bed.
+nobody asked, dumbass.
+damn, that's crazy. / anyway, go to sleep.
+i'm too tired for this shit.
+sure, jan.
+
+[fact kickers | clean]
+did you know?
+ain't that interesting?
+fun fact
+useless knowledge
+here's a thing
+
+[fact kickers | cheeky]
+nobody asked, but
+here's a thing you'll never need
+for no reason at all
+
+[fact kickers | raunchy]
+drunk fact
+fact you'll forget by morning
+shit you didn't need to know

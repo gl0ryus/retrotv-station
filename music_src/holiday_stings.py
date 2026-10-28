@@ -70,17 +70,21 @@ def noise(seconds, decay, rnd):
 
 
 class Mix:
-    def __init__(self):
-        self.n = int(LENGTH * SR)
+    def __init__(self, seconds=LENGTH, wrap=False):
+        """wrap: a seamless loop, notes ringing past the end carry over to the start."""
+        self.n, self.wrap = int(seconds * SR), wrap
         self.left, self.right = [0.0] * self.n, [0.0] * self.n
 
     def add(self, start, samples, gain, pan=0.0):
         """pan: -1 (left) .. 1 (right)."""
         gl, gr = gain * math.cos((pan + 1) * math.pi / 4), gain * math.sin((pan + 1) * math.pi / 4)
         i0 = int(start * SR)
-        for k, v in enumerate(samples[:max(0, self.n - i0)]):
-            self.left[i0 + k] += v * gl
-            self.right[i0 + k] += v * gr
+        for k, v in enumerate(samples):
+            i = (i0 + k) % self.n if self.wrap else i0 + k   # a loop's tails carry over to its start
+            if i >= self.n:
+                break
+            self.left[i] += v * gl
+            self.right[i] += v * gr
 
     def play(self, start, bpm, notes, voice, gain, pan=0.0, legato=0.92, strum=0.0):
         """notes: (pitch, beats) in a row; a pitch can be a chord ("C4+E4+G4", strummed by `strum` seconds a
@@ -96,14 +100,16 @@ class Mix:
         for t in times:
             self.add(t, noise(seconds, decay, rnd), gain, pan)
 
-    def write(self, path):
+    def write(self, path, mean_db=MEAN_DB, fade=FADE):
+        """A 16-bit WAV levelled to mean_db (never peaking over PEAK_DB), faded over the last `fade` seconds
+        (0 for a loop)."""
         peak = max(max(map(abs, self.left)), max(map(abs, self.right))) or 1.0
         rms = math.sqrt((sum(v * v for v in self.left) + sum(v * v for v in self.right)) / (2 * self.n)) or 1.0
-        scale = min(10 ** (MEAN_DB / 20) / rms, 10 ** (PEAK_DB / 20) / peak) * 32767
-        fade = int(FADE * SR)
+        scale = min(10 ** (mean_db / 20) / rms, 10 ** (PEAK_DB / 20) / peak) * 32767
+        fade = int(fade * SR)
         frames = array.array("h")
         for i in range(self.n):
-            g = scale * min(1.0, (self.n - i) / fade)
+            g = scale * (min(1.0, (self.n - i) / fade) if fade else 1.0)
             frames.append(int(self.left[i] * g))
             frames.append(int(self.right[i] * g))
         with wave.open(path, "wb") as w:

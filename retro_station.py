@@ -19,6 +19,7 @@ import retrotv_events as events
 import retrotv_meta as meta
 import retrotv_remote as remote
 import retrotv_alerts as alerts
+import retrotv_blurbs as blurbs
 
 # --- Configuration ---
 MEDIA_ROOT = "/mnt/tower/.retrotv"
@@ -122,7 +123,12 @@ SPECIALS = {
     "space": 180,    # Who's in Space, with the ISS on a world map
     "markets": 90,   # BTC, ETH and the S&P 500 with their 24-hour change (CoinGecko, Yahoo Finance)
     "reminder": 120, # a heads-up before Valentine's, Mother's and Father's Day (see REMINDERS)
+    "blurb": 30,     # text bumps: facts, food for thought, dad jokes, raunchier late at night (retrotv_blurbs)
 }
+# How far the text bumps go: clean until BLURB_CHEEKY_HOUR, cheeky until BLURB_RAUNCHY_HOUR, raunchy to sign-off
+# (crude, never hateful). Always clean in the kids' dayparts
+BLURB_CHEEKY_HOUR = 21
+BLURB_RAUNCHY_HOUR = 23
 SPECIAL_GAP_MINUTES = 10
 FRESH_SPECIALS = ("weather",)   # made again with the latest data just before they're queued
 WEATHER_PLACE = "Town, ST"
@@ -341,6 +347,14 @@ def mix_at(day, hour):
         if day in days and start <= hour < end:
             return mix
     return DEFAULT_MIX
+
+
+def blurb_level(t):
+    """How far a text bump airing at t can go: "clean", "cheeky" or "raunchy" (see BLURB_CHEEKY_HOUR)."""
+    day, hour = broadcast_hour(t)   # after midnight counts as hour 24, 25, ...
+    if "kids" in mix_at(day, hour) or hour < BLURB_CHEEKY_HOUR:
+        return "clean"
+    return "raunchy" if hour >= BLURB_RAUNCHY_HOUR else "cheeky"
 
 
 def roll_category(when=None):
@@ -2695,6 +2709,8 @@ class Station:
         if kind == "reminder":
             upcoming = next_reminder(airs_at.date())
             return events.reminder(*upcoming, airs_at, season) if upcoming else None
+        if kind == "blurb":
+            return blurbs.blurb(blurb_level(airs_at))
         return None
 
     def guide_rows(self, first_start):
