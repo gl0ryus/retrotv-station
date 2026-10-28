@@ -124,6 +124,7 @@ SPECIALS = {
     "reminder": 120, # a heads-up before Valentine's, Mother's and Father's Day (see REMINDERS)
 }
 SPECIAL_GAP_MINUTES = 10
+FRESH_SPECIALS = ("weather",)   # made again with the latest data just before they're queued
 WEATHER_PLACE = "Town, ST"
 WEATHER_LAT, WEATHER_LON = 0.0, 0.0
 WEATHER_TZ = "America/New_York"
@@ -1848,6 +1849,7 @@ class Item:
         self.offset = 0.0       # where in the file the act starts
         self.overlay = None     # overlay_filter() arguments, so a glitch can be added at the last moment
         self.channel = None     # (number, name) for a make-believe channel's show
+        self.refresh = None     # remakes a card with the latest data just before it's queued (Station._refresh)
 
 
 class Player:
@@ -2349,7 +2351,10 @@ class Station:
         """Plays an item, with a burst of static before it when the picture changes. False when a skip
         from the remote dropped it (everything after a skip is dropped until the next step)."""
         quiet_after = QUIET_AFTER + (("standby",) if item.kind == "standby" else ())
-        # Worked out before the player's wait for a free slot, so a probe never holds up the next file
+        # Worked out before the player's wait for a free slot (while the item before last is still playing),
+        # so a fetch or probe never holds up the next file
+        if item.refresh:
+            self._refresh(item)
         self._stretch(item)
         if (STATIC_FILE and os.path.exists(STATIC_FILE) and self.prev_kind and self.prev_kind not in quiet_after
                 and item.kind not in NO_STATIC):
@@ -2366,6 +2371,20 @@ class Station:
         if ok:
             self.prev_kind = item.kind
         return ok
+
+    def _refresh(self, item):
+        """Remakes a card (the weather) with the latest data just before it's queued, since it was made when
+        the break was planned, minutes earlier. Keeps the planned one if that fails or comes out a different
+        length (the break around it was timed for it)."""
+        try:
+            card = item.refresh()
+        except Exception:
+            logger.exception(f"Could not refresh {item.label}")
+            return
+        if card and abs(card.duration - item.duration) < 0.05:
+            item.url = card.url
+        else:
+            logger.info(f"Keeping the {item.kind} screen made when the break was planned")
 
     def _stretch(self, item):
         """A picture narrower than the screen fills it (see STRETCH). Cached files use the aspect saved when
@@ -2646,16 +2665,22 @@ class Station:
                 card = None
             if card:
                 self.special_last[kind] = self.last_special = now
-                return self.card(card)
+                item = self.card(card)
+                if kind in FRESH_SPECIALS:
+                    item.refresh = lambda kind=kind: self.build_special(kind, self.eta(), first_start, fresh=True)
+                return item
             self.special_last[kind] = now - SPECIALS[kind] * 60 + 900  # no data right now, try again in 15 min
         return None
 
-    def build_special(self, kind, airs_at, first_start):
+    def build_special(self, kind, airs_at, first_start, fresh=False):
+        """A special screen for airs_at, or None without data. fresh: made just before it's queued, so the
+        data is fetched again unless it's very recent, with less time to wait for it (see _refresh)."""
         season, month = holiday_look(airs_at.date()), heritage_month(airs_at.date())
         if kind == "guide":
             return cards.guide(self.guide_rows(first_start), airs_at, season)
         if kind == "weather":
-            data = cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ)
+            data = (cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ, max_age_minutes=2, timeout=4) if fresh
+                    else cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ))
             return cards.weather(data, WEATHER_PLACE, airs_at, season) if data else None
         if kind == "quiz":
             return screens.pop_quiz(season, month)

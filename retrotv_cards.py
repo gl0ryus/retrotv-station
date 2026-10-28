@@ -657,18 +657,22 @@ WMO = {
 COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
 
 
-def fetch_weather(lat, lon, tz, max_age_minutes=30):
-    """Current conditions and a 4-day forecast from Open-Meteo, cached on the SD card."""
+def fetch_weather(lat, lon, tz, max_age_minutes=10, stale_minutes=60, timeout=8):
+    """Current conditions and a forecast from today on from Open-Meteo, cached on the SD card. The cache only
+    stands in for a fetch while it's under max_age_minutes old and from today (after midnight yesterday's
+    forecast would show yesterday as today), or for up to stale_minutes when the fetch fails. weather() then
+    picks today out by date, so a forecast from late last night still works."""
     cached = None
     try:
         with open(WEATHER_FILE) as f:
             cached = json.load(f)
-        if time.time() - cached["fetched"] < max_age_minutes * 60:
+        if (time.time() - cached["fetched"] < max_age_minutes * 60
+                and cached["daily"]["time"][0] == datetime.date.today().isoformat()):
             return cached
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
         pass
     query = urllib.parse.urlencode({
-        "latitude": lat, "longitude": lon, "timezone": tz, "forecast_days": 4,
+        "latitude": lat, "longitude": lon, "timezone": tz, "forecast_days": 5,   # today, three more, one spare
         "temperature_unit": "fahrenheit", "wind_speed_unit": "mph", "precipitation_unit": "inch",
         "current": "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,"
                    "wind_speed_10m,wind_direction_10m,pressure_msl,dew_point_2m",
@@ -676,7 +680,7 @@ def fetch_weather(lat, lon, tz, max_age_minutes=30):
                  "sunrise,sunset,uv_index_max",
     })
     try:
-        with urllib.request.urlopen(f"https://api.open-meteo.com/v1/forecast?{query}", timeout=8) as r:
+        with urllib.request.urlopen(f"https://api.open-meteo.com/v1/forecast?{query}", timeout=timeout) as r:
             data = json.load(r)
         data["fetched"] = time.time()
         tmp = WEATHER_FILE + ".tmp"
@@ -686,8 +690,7 @@ def fetch_weather(lat, lon, tz, max_age_minutes=30):
         return data
     except Exception as e:
         logger.warning(f"Weather fetch failed: {e}")
-    # A stale forecast is fine for a few hours
-    if cached and time.time() - cached.get("fetched", 0) < 3 * 3600:
+    if cached and time.time() - cached.get("fetched", 0) < stale_minutes * 60:
         return cached
     return None
 
@@ -738,10 +741,13 @@ def _icon(s, start, end, kind, x, y, scale=1.0, night=False):
 
 
 def weather(data, place, now=None, season=None):
-    """Three pages (current conditions, extended forecast, almanac) with a crawl along the bottom."""
+    """Three pages (current conditions, extended forecast, almanac) with a crawl along the bottom. Today is
+    the forecast day dated `now` (the time the card airs), never just the first one in the data; None when
+    the data has no forecast for today."""
     now = now or datetime.datetime.now()
     try:
         cur, daily = data["current"], data["daily"]
+        t = daily["time"].index(now.date().isoformat())
         temp = round(cur["temperature_2m"])
         humidity = round(cur["relative_humidity_2m"])
         cond, icon = WMO.get(cur["weather_code"], ("", "cloud"))
@@ -749,13 +755,13 @@ def weather(data, place, now=None, season=None):
         wind_dir = COMPASS[int((cur["wind_direction_10m"] % 360) / 22.5 + 0.5) % 16]
         wind = "Calm" if cur["wind_speed_10m"] < 1 else f"{wind_dir} {round(cur['wind_speed_10m'])} mph"
         pressure = f"{cur['pressure_msl'] * 0.02953:.2f} in"
-        today_hi, today_lo = round(daily["temperature_2m_max"][0]), round(daily["temperature_2m_min"][0])
-        rain_today = daily["precipitation_probability_max"][0]
-        sunrise = clock(datetime.datetime.fromisoformat(daily["sunrise"][0]))
-        sunset = clock(datetime.datetime.fromisoformat(daily["sunset"][0]))
-        uv = round(daily["uv_index_max"][0])
+        today_hi, today_lo = round(daily["temperature_2m_max"][t]), round(daily["temperature_2m_min"][t])
+        rain_today = daily["precipitation_probability_max"][t]
+        sunrise = clock(datetime.datetime.fromisoformat(daily["sunrise"][t]))
+        sunset = clock(datetime.datetime.fromisoformat(daily["sunset"][t]))
+        uv = round(daily["uv_index_max"][t])
     except (KeyError, TypeError, ValueError, IndexError) as e:
-        logger.warning(f"Weather data unusable: {e}")
+        logger.warning(f"Weather data unusable for {now:%a %b %d}: {e!r}")
         return None
 
     page, pages = 21.0, 3   # 63 s, inside the 64 s bed
@@ -793,7 +799,7 @@ def weather(data, place, now=None, season=None):
 
     # Page 2: extended forecast for the next three days
     a, b = page, 2 * page
-    for col, i in enumerate(range(1, 4)):
+    for col, i in enumerate(range(t + 1, t + 4)):
         try:
             day = datetime.date.fromisoformat(daily["time"][i])
             dcond, dicon = WMO.get(daily["weather_code"][i], ("", "cloud"))
