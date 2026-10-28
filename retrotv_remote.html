@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#16110d">
+<title>GL0RYUS TV Guide</title>
+<style>
+@font-face { font-family: "Archivo Black"; src: url(/fonts/ArchivoBlack-Regular.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 600; src: url(/fonts/BarlowCondensed-SemiBold.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 700; src: url(/fonts/BarlowCondensed-Bold.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 800; src: url(/fonts/BarlowCondensed-ExtraBold.ttf); }
+/* The station's own look: the bumper's warm near-black, cream type, mustard accents and the four stripes */
+:root {
+  --bg: #16110d; --grid: #211912; --panel: #2b2017; --cell: #4e3420; --cell-now: #6e4724; --cell-off: #2a1f16;
+  --line: #3d2c1e; --edge: #7a5232; --white: #efe6d2; --sky: #c4ad88; --yellow: #f2b33d; --mustard: #e8b33a;
+  --cream: #efe6d2; --ink: #16110d; --shadow-red: #8a2a1f;
+  --s1: #f2b33d; --s2: #ee7f2a; --s3: #dd4f27; --s4: #b8322a; --live: #ff5a2e;
+  --stripes: linear-gradient(to bottom, var(--s1) 0 3px, var(--bg) 3px 4px, var(--s2) 4px 7px, var(--bg) 7px 8px,
+                             var(--s3) 8px 11px, var(--bg) 11px 12px, var(--s4) 12px 14px);
+  --col: 140px; --chan: 78px; --rowh: 66px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--white); }
+body { font: 600 17px/1.25 "Barlow Condensed", system-ui, sans-serif; padding: 14px 0 calc(24px + env(safe-area-inset-bottom)); }
+.pad { padding: 0 16px; max-width: 760px; margin: 0 auto; }
+header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.logo { font-family: "Archivo Black"; font-size: 30px; letter-spacing: .5px; transform: skewX(-9deg); line-height: 1; color: var(--cream);
+        text-shadow: 3px 3px 0 var(--shadow-red); }
+.stripes { margin-top: 5px; display: grid; gap: 3px; }
+.stripes i { display: block; height: 4px; clip-path: polygon(0 0, 100% 0, calc(100% - 6px) 100%, 0 100%); }
+.stripes i:nth-child(1) { background: var(--s1); width: 170px; } .stripes i:nth-child(2) { background: var(--s2); width: 158px; }
+.stripes i:nth-child(3) { background: var(--s3); width: 146px; } .stripes i:nth-child(4) { background: var(--s4); width: 134px; }
+.net { font-weight: 800; color: var(--mustard); letter-spacing: 6px; font-size: 13px; margin-top: 5px; }
+.status { text-align: right; }
+.clock { font-weight: 800; font-size: 26px; color: var(--mustard); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 800; font-size: 13px; letter-spacing: 2px;
+        padding: 3px 9px; border-radius: 99px; background: var(--panel); color: var(--sky); }
+.pill.on { color: var(--cream); background: #5a1c12; }
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.pill.on .dot { background: var(--live); box-shadow: 0 0 8px var(--live); }
+
+.now { background: var(--grid); border: 2px solid var(--edge); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+.chanline { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.badge { display: inline-flex; align-items: baseline; gap: 8px; font-weight: 800; letter-spacing: 3px; font-size: 14px; color: var(--sky); }
+.badge b { font-family: "Archivo Black"; font-size: 20px; letter-spacing: 0; color: #6dff6d; text-shadow: 0 0 8px #3f3; }
+.now-name { font-family: "Archivo Black"; font-size: 25px; line-height: 1.1; overflow-wrap: anywhere; color: var(--cream); }
+.now-ep { color: var(--sky); font-size: 18px; margin-top: 4px; overflow-wrap: anywhere; }
+.meta { color: var(--sky); font-size: 15px; margin-top: 3px; opacity: .85; }
+.bar { height: 5px; background: var(--panel); border-radius: 3px; margin-top: 10px; overflow: hidden; }
+.bar b { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--s1), var(--s2), var(--s3)); transition: width .8s linear; }
+
+.controls { display: grid; grid-template-columns: 1.3fr 1fr auto 1fr 1fr; gap: 8px; margin-bottom: 14px; align-items: stretch; }
+button { font: 800 16px "Barlow Condensed", system-ui, sans-serif; letter-spacing: 1px; color: var(--cream);
+         background: var(--panel); border: 1px solid var(--edge); border-radius: 10px; padding: 12px 6px; cursor: pointer;
+         -webkit-tap-highlight-color: transparent; }
+button:hover { border-color: var(--mustard); }
+button:active { transform: translateY(1px); filter: brightness(1.2); }
+button.hot { background: var(--s3); border-color: var(--s3); }
+button.gold { background: var(--mustard); border-color: var(--mustard); color: var(--ink); }
+.vol { display: grid; place-items: center; min-width: 44px; font-size: 13px; color: var(--sky); }
+.vol strong { font-size: 21px; color: var(--cream); line-height: 1; }
+
+.guide-head { display: flex; justify-content: space-between; align-items: baseline; margin: 0 0 8px; }
+.kicker { font-weight: 800; color: var(--mustard); letter-spacing: 4px; font-size: 14px; }
+.hint { color: var(--sky); font-size: 14px; opacity: .85; }
+/* The listings sit under the network's four stripes */
+.stripe-band { height: 14px; background: var(--stripes); }
+.scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border-bottom: 2px solid var(--edge); background: var(--grid);
+          scrollbar-width: thin; scrollbar-color: var(--edge) var(--grid); }
+.grid { position: relative; }
+.times, .row { display: flex; }
+.times { height: 30px; background: var(--panel); }
+.corner, .chan { position: sticky; left: 0; z-index: 3; width: var(--chan); flex: none; }
+.corner { background: var(--panel); border-right: 2px solid var(--edge); }
+.tick { width: var(--col); flex: none; color: var(--mustard); font-weight: 800; font-size: 15px; padding: 6px 8px; border-left: 1px solid var(--line); }
+.row { height: var(--rowh); border-top: 1px solid var(--line); }
+.chan { background: var(--panel); border-right: 2px solid var(--edge); display: flex; flex-direction: column; justify-content: center; padding: 0 8px; }
+.chan .num { font-family: "Archivo Black"; font-size: 19px; color: var(--cream); line-height: 1; }
+.chan .cname { font-weight: 800; font-size: 12px; letter-spacing: 1px; color: var(--sky); line-height: 1.1; margin-top: 3px; }
+.row.main .chan { background: #3d2a12; border-right-color: var(--mustard); }
+.row.main .chan .num { color: var(--mustard); }
+.track { position: relative; flex: none; }
+.cell { position: absolute; top: 4px; bottom: 4px; background: var(--cell); border: 1px solid var(--edge); border-radius: 6px;
+        padding: 5px 8px; overflow: hidden; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.cell:hover { filter: brightness(1.15); }
+.cell:active { filter: brightness(1.25); }
+.cell.onnow { background: var(--cell-now); }
+.cell.off { background: var(--cell-off); border-color: var(--line); cursor: default; }
+.cell.off:hover { filter: none; }
+.cell.off .cn { color: var(--sky); font-style: italic; font-weight: 600; }
+.cell.watching { box-shadow: inset 0 0 0 3px var(--mustard); }
+.row.main .cell { background: #5c3a14; border-color: var(--mustard); }
+.row.main .cell.onnow { background: #7a4d16; }
+.ct { color: var(--mustard); font-size: 13px; font-weight: 800; white-space: nowrap; }
+.cn { font-weight: 800; font-size: 16px; line-height: 1.05; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--cream); }
+.ce { color: var(--sky); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nowline { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--live); box-shadow: 0 0 6px var(--live); z-index: 2; pointer-events: none; }
+
+.find { margin-top: 18px; }
+input { width: 100%; font: 600 18px "Barlow Condensed", system-ui, sans-serif; color: var(--cream); background: var(--grid);
+        border: 1px solid var(--edge); border-radius: 10px; padding: 12px; margin-top: 8px; }
+input::placeholder { color: var(--sky); opacity: .7; }
+input:focus { outline: 2px solid var(--mustard); border-color: transparent; }
+.result { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.result .name { font-weight: 800; font-size: 18px; overflow-wrap: anywhere; }
+.result .ep { color: var(--sky); font-size: 15px; overflow-wrap: anywhere; }
+.where { font-size: 12px; letter-spacing: 1px; color: var(--sky); opacity: .8; }
+.result button { padding: 9px 10px; font-size: 15px; white-space: nowrap; }
+
+.sheet-bg { position: fixed; inset: 0; background: #000a; opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 10; }
+.sheet-bg.show { opacity: 1; pointer-events: auto; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 11; background: var(--grid); border-top: 3px solid var(--mustard);
+         border-radius: 16px 16px 0 0; padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); transform: translateY(105%);
+         transition: transform .25s ease; max-width: 640px; margin: 0 auto; }
+.sheet.show { transform: translateY(0); }
+.sheet .now-name { font-size: 24px; }
+.sheet .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
+.toast { position: fixed; left: 50%; bottom: calc(18px + env(safe-area-inset-bottom)); transform: translate(-50%, 140%);
+         background: var(--mustard); color: var(--ink); font-weight: 800; padding: 10px 16px; border-radius: 10px; z-index: 20;
+         max-width: calc(100% - 32px); transition: transform .25s ease, opacity .25s ease; box-shadow: 0 6px 24px #0008;
+         opacity: 0; pointer-events: none; }
+.toast.show { transform: translate(-50%, 0); opacity: 1; }
+
+/* Desktop: a big listings grid across the whole window, with now-playing and the controls side by side above it */
+@media (min-width: 960px) {
+  :root { --col: 150px; --chan: 124px; --rowh: 88px; }
+  body { font-size: 19px; padding-top: 22px; }
+  .pad { max-width: none; padding: 0 32px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 32%); column-gap: 20px; }
+  header, .guide-head { grid-column: 1 / -1; }
+  header { margin-bottom: 20px; }
+  .logo { font-size: 46px; text-shadow: 4px 4px 0 var(--shadow-red); }
+  .stripes { gap: 4px; margin-top: 9px; }
+  .stripes i { height: 6px; }
+  .stripes i:nth-child(1) { width: 260px; } .stripes i:nth-child(2) { width: 242px; }
+  .stripes i:nth-child(3) { width: 224px; } .stripes i:nth-child(4) { width: 206px; }
+  .net { font-size: 16px; letter-spacing: 9px; margin-top: 8px; }
+  .clock { font-size: 40px; }
+  .pill { font-size: 15px; padding: 5px 12px; }
+  .now { margin-bottom: 18px; padding: 18px 22px; }
+  .badge { font-size: 16px; } .badge b { font-size: 26px; }
+  .now-name { font-size: 34px; }
+  .now-ep { font-size: 22px; }
+  .meta { font-size: 18px; }
+  .bar { height: 7px; margin-top: 14px; }
+  /* Big remote buttons beside now-playing, as tall as it: SKIP and MUTE, then VOL - / level / VOL + */
+  .controls { grid-template-columns: 1fr minmax(96px, auto) 1fr; grid-template-rows: 1fr 1fr; gap: 12px; margin-bottom: 18px; }
+  .controls #skip { grid-row: 1; grid-column: 1 / 3; }
+  .controls #muteBtn { grid-row: 1; grid-column: 3; }
+  .controls #volDown { grid-row: 2; grid-column: 1; }
+  .controls .vol { grid-row: 2; grid-column: 2; background: var(--grid); border: 1px solid var(--line); border-radius: 10px; font-size: 16px; }
+  .controls #volUp { grid-row: 2; grid-column: 3; }
+  .controls .vol strong { font-size: 34px; }
+  button { font-size: 21px; letter-spacing: 2px; padding: 14px 10px; }
+  .guide-head { margin-bottom: 10px; }
+  .kicker { font-size: 17px; letter-spacing: 6px; }
+  .hint { font-size: 17px; }
+  .stripe-band, .scroll { margin: 0 32px; }
+  .stripe-band { height: 14px; }
+  .scroll { border-radius: 0 0 10px 10px; border: 2px solid var(--edge); border-top: 0; }
+  .times { height: 40px; }
+  .tick { font-size: 19px; padding: 9px 12px; }
+  .chan { padding: 0 14px; }
+  .chan .num { font-size: 30px; }
+  .chan .cname { font-size: 15px; letter-spacing: 1.5px; margin-top: 5px; }
+  .cell { top: 6px; bottom: 6px; padding: 8px 12px; border-radius: 8px; }
+  .ct { font-size: 16px; }
+  .cn { font-size: 23px; margin-top: 2px; }
+  .ce { font-size: 17px; margin-top: 2px; }
+  .find { margin-top: 26px; display: block; }
+  input { font-size: 21px; padding: 14px 16px; max-width: 720px; }
+  #results { display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); column-gap: 28px; }
+  .result .name { font-size: 21px; } .result .ep { font-size: 17px; } .where { font-size: 14px; }
+  .sheet { bottom: auto; top: 50%; left: 50%; right: auto; width: min(560px, 90vw); border-radius: 16px; border: 2px solid var(--edge);
+           border-top: 4px solid var(--mustard); transform: translate(-50%, -40%) scale(.96); opacity: 0; pointer-events: none;
+           transition: transform .2s ease, opacity .2s ease; padding: 24px; margin: 0; }
+  .sheet.show { transform: translate(-50%, -50%); opacity: 1; pointer-events: auto; }
+  .sheet .now-name { font-size: 30px; }
+}
+@media (min-width: 1500px) {
+  :root { --col: 170px; --chan: 140px; --rowh: 96px; }
+  .pad { padding: 0 48px; }
+  .stripe-band, .scroll { margin: 0 48px; }
+  .cn { font-size: 25px; }
+}
+</style>
+</head>
+<body>
+<div class="pad">
+  <header>
+    <div>
+      <div class="logo">GL0RYUS</div>
+      <div class="stripes"><i></i><i></i><i></i><i></i></div>
+      <div class="net">TV GUIDE</div>
+    </div>
+    <div class="status">
+      <div class="clock" id="clock">--:--</div>
+      <span class="pill" id="air"><span class="dot"></span><span id="airText">…</span></span>
+    </div>
+  </header>
+
+  <section class="now">
+    <div class="chanline">
+      <span class="badge"><b id="chNum">03</b><span id="chName">G|TV</span></span>
+      <button id="backMain" class="gold" style="display:none; padding: 8px 12px">BACK TO <span class="mainName">G|TV</span></button>
+    </div>
+    <div class="now-name" id="nowName">Tuning in…</div>
+    <div class="now-ep" id="nowEp"></div>
+    <div class="meta" id="nowMeta"></div>
+    <div class="bar"><b id="nowBar"></b></div>
+  </section>
+
+  <div class="controls">
+    <button id="skip">SKIP</button>
+    <button id="volDown">VOL −</button>
+    <div class="vol"><strong id="vol">–</strong><span id="mute">vol</span></div>
+    <button id="volUp">VOL +</button>
+    <button id="muteBtn">MUTE</button>
+  </div>
+
+  <div class="guide-head">
+    <span class="kicker">LISTINGS</span>
+    <span class="hint">Tap a show to watch it</span>
+  </div>
+</div>
+
+<div class="stripe-band"></div>
+<div class="scroll" id="scroll"><div class="grid" id="grid"></div></div>
+
+<div class="pad find">
+  <div class="kicker">FIND A SHOW</div>
+  <div class="hint">Puts it on next on <span class="mainName">G|TV</span></div>
+  <input id="q" type="search" placeholder="Search shows, episodes, movies…" autocomplete="off" enterkeyhint="search">
+  <div id="copying" class="hint"></div>
+  <div id="results"></div>
+</div>
+
+<div class="sheet-bg" id="sheetBg"></div>
+<div class="sheet" id="sheet">
+  <span class="badge"><b id="shNum">04</b><span id="shChan">TOON TOWN</span></span>
+  <div class="now-name" id="shName"></div>
+  <div class="now-ep" id="shEp"></div>
+  <div class="meta" id="shMeta"></div>
+  <div class="actions">
+    <button id="shCancel">CLOSE</button>
+    <button id="shGo" class="gold">WATCH NOW</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const pad2 = n => String(n).padStart(2, "0");
+let COL = 140, CHAN = 78;   // half-hour and channel column widths, from the CSS for this screen size
+const cssPx = (name, fallback) => {
+  const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue(name));
+  return isNaN(v) ? fallback : v;
+};
+// The columns widen to fill a big screen; on a phone they stay at --col and the grid scrolls sideways
+function sizeGuide(cols) {
+  CHAN = cssPx("--chan", 78);
+  COL = Math.max(cssPx("--col", 140), Math.floor(($("scroll").clientWidth - CHAN) / cols));
+}
+let state = null, guide = null;
+const MAIN = () => (state && state.main_channel ? state.main_channel.name : "G|TV");
+
+let toastTimer;
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+async function post(path, body) {
+  try {
+    const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    const data = await r.json();
+    toast(data.message || data.error || "Done");
+  } catch (e) { toast("The station didn't answer."); }
+  setTimeout(refresh, 600); setTimeout(loadGuide, 1500);
+}
+
+const KIND = { commercial: "COMMERCIAL BREAK", card: "STATION BREAK", guide: "PROGRAM GUIDE", weather: "LOCAL WEATHER",
+  id: "STATION ID", bumper: "STATION ID", static: "STATION BREAK", lottery: "LOTTERY DRAWING", anthem: "SIGN-OFF",
+  offair: "OFF THE AIR", poweroff: "OFF THE AIR", dark: "OFF THE AIR", signon: "SIGN-ON", newyear: "NEW YEAR'S COUNTDOWN",
+  standby: "PLEASE STAND BY", quiz: "POP QUIZ", history: "TODAY IN HISTORY", launch: "LAUNCH WATCH", space: "WHO'S IN SPACE" };
+
+function render(s) {
+  state = s;
+  $("clock").textContent = s.time;
+  $("air").classList.toggle("on", s.on_air);
+  $("airText").textContent = s.on_air ? "ON AIR" : "OFF AIR";
+  $("vol").textContent = s.volume;
+  $("mute").textContent = s.muted ? "muted" : "vol";
+  $("muteBtn").textContent = s.muted ? "UNMUTE" : "MUTE";
+  $("chNum").textContent = pad2(s.channel.number);
+  $("chName").textContent = s.channel.name;
+  $("backMain").style.display = s.channel.main ? "none" : "";
+  for (const e of document.querySelectorAll(".mainName")) e.textContent = MAIN();
+
+  const n = s.now;
+  let pct = 0;
+  if (!n) {
+    $("nowName").textContent = s.on_air ? "Between items" : "Good night";
+    $("nowEp").textContent = ""; $("nowMeta").textContent = "";
+  } else if (n.show && (n.kind === "act" || n.kind === "detour")) {
+    const sh = n.show;
+    $("nowName").textContent = sh.name;
+    $("nowEp").textContent = sh.episode || "";
+    const when = n.kind === "detour" ? `Back to ${MAIN()} at ${sh.end}` : (sh.start && sh.end ? `${sh.start} – ${sh.end}` : "");
+    $("nowMeta").textContent = [sh.marathon || "", when, sh.aired ? `Originally aired ${sh.aired}` : ""].filter(Boolean).join(" · ");
+    pct = sh.progress != null ? sh.progress * 100 : 0;
+  } else {
+    $("nowName").textContent = KIND[n.kind] || "The GL0RYUS Network";
+    const label = n.kind === "commercial" ? n.label.replace(/\.[a-z0-9]{2,4}$/i, "").replace(/_/g, " ") : "";
+    $("nowEp").textContent = n.show ? `Back to ${n.show.name} soon` : label;
+    $("nowMeta").textContent = n.duration ? `${Math.max(0, n.duration - n.elapsed)}s left` : "";
+    pct = n.duration ? 100 * n.elapsed / n.duration : 0;
+  }
+  $("nowBar").style.width = Math.min(100, pct).toFixed(1) + "%";
+  $("copying").textContent = s.copying.length ? `Copying from the NAS: ${s.copying.join(", ")}` : "";
+  markWatching();
+}
+
+function clock12(ts) {
+  const d = new Date(ts * 1000); let h = d.getHours() % 12 || 12;
+  return `${h}:${pad2(d.getMinutes())}`;
+}
+
+function renderGuide(g) {
+  guide = g;
+  const cols = Math.round((g.end - g.start) / 1800);
+  sizeGuide(cols);
+  const grid = $("grid");
+  grid.replaceChildren();
+  grid.style.width = (CHAN + cols * COL) + "px";
+  const times = el("div", "times");
+  times.append(el("div", "corner"));
+  for (let i = 0; i < cols; i++) {
+    const ts = g.start + i * 1800, d = new Date(ts * 1000);
+    const tick = el("div", "tick", clock12(ts) + (d.getMinutes() === 0 ? (d.getHours() < 12 ? " AM" : " PM") : ""));
+    tick.style.width = COL + "px";
+    times.append(tick);
+  }
+  grid.append(times);
+  for (const ch of g.channels) {
+    const row = el("div", "row" + (ch.main ? " main" : ""));
+    const chan = el("div", "chan");
+    chan.append(el("div", "num", pad2(ch.number)), el("div", "cname", ch.name));
+    const track = el("div", "track"); track.style.width = cols * COL + "px";
+    for (const p of ch.programs) {
+      const a = Math.max(p.start, g.start), b = Math.min(p.end, g.end);
+      if (b <= a) continue;
+      const cell = el("div", "cell");
+      cell.style.left = ((a - g.start) / 1800 * COL + 2) + "px";
+      cell.style.width = ((b - a) / 1800 * COL - 4) + "px";
+      if (g.now >= p.start && g.now < p.end) cell.classList.add("onnow");
+      if (!p.id || (!ch.main && !p.playable)) cell.classList.add("off");
+      cell.dataset.channel = ch.number; cell.dataset.id = p.id || "";
+      cell.append(el("div", "ct", (p.start < g.start ? "◀ " : "") + p.time));
+      cell.append(el("div", "cn", p.name));
+      if (p.episode && (b - a) >= 1500) cell.append(el("div", "ce", p.episode));
+      cell.addEventListener("click", () => pick(ch, p));
+      track.append(cell);
+    }
+    row.append(chan, track);
+    grid.append(row);
+  }
+  const line = el("div", "nowline"); line.id = "nowline";
+  line.style.left = (CHAN + (g.now - g.start) / 1800 * COL) + "px";
+  grid.append(line);
+  markWatching();
+}
+
+function markWatching() {
+  if (!guide || !state) return;
+  const now = Date.now() / 1000;
+  const id = state.now && state.now.show ? state.now.show.id : null;
+  for (const c of document.querySelectorAll(".cell")) {
+    const main = c.closest(".row").classList.contains("main");
+    const on = state.channel.main ? main && c.classList.contains("onnow")
+                                  : !main && Number(c.dataset.channel) === state.channel.number && c.dataset.id === id;
+    c.classList.toggle("watching", on);
+  }
+  const line = $("nowline");
+  if (line) line.style.left = (CHAN + (now - guide.start) / 1800 * COL) + "px";
+}
+
+let picked = null;
+function pick(ch, p) {
+  if (ch.main) {
+    if (state && !state.channel.main) { openSheet(ch, p, `BACK TO ${MAIN().toUpperCase()}`); return; }
+    toast(guide.now >= p.start && guide.now < p.end ? "That's on now." : `On ${MAIN()} at ${p.time}.`);
+    return;
+  }
+  if (!p.id || !p.playable) { toast(p.id ? "That one's no longer on the Pi." : p.name); return; }
+  openSheet(ch, p, "WATCH NOW");
+}
+function openSheet(ch, p, action) {
+  picked = { ch, p };
+  $("shNum").textContent = pad2(ch.number); $("shChan").textContent = ch.name;
+  $("shName").textContent = p.name; $("shEp").textContent = p.episode || "";
+  const now = Date.now() / 1000, into = Math.floor((now - p.start) / 60);
+  $("shMeta").textContent = ch.main ? `Listed ${p.time} on ${MAIN()}` :
+    (now >= p.start && now < p.end
+      ? `On now · joins ${into} min in (${p.time} start), then back to ${MAIN()}`
+      : `${p.minutes ? p.minutes + " min · " : ""}Listed ${p.time} · starts from the beginning, then back to ${MAIN()}`);
+  $("shGo").textContent = action;
+  $("sheet").classList.add("show"); $("sheetBg").classList.add("show");
+}
+function closeSheet() { $("sheet").classList.remove("show"); $("sheetBg").classList.remove("show"); }
+$("shCancel").addEventListener("click", closeSheet);
+$("sheetBg").addEventListener("click", closeSheet);
+$("shGo").addEventListener("click", () => {
+  if (!picked) return;
+  closeSheet();
+  if (picked.ch.main) post("/api/main");
+  else post("/api/tune", { channel: picked.ch.number, id: picked.p.id });
+});
+
+async function refresh() {
+  try { render(await (await fetch("/api/state", { cache: "no-store" })).json()); }
+  catch (e) { $("airText").textContent = "NO SIGNAL"; }
+}
+async function loadGuide() {
+  try { renderGuide(await (await fetch("/api/guide", { cache: "no-store" })).json()); } catch (e) {}
+}
+
+let searchTimer, lastQuery = "";
+$("q").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(search, 300); });
+async function search() {
+  const q = $("q").value.trim();
+  if (q === lastQuery) return;
+  lastQuery = q;
+  const box = $("results"); box.replaceChildren();
+  if (q.length < 2) return;
+  let hits = [];
+  try { hits = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json(); } catch (e) { return; }
+  if (q !== lastQuery) return;
+  if (!hits.length) { box.append(el("div", "hint", "Nothing by that name.")); return; }
+  for (const h of hits) {
+    const row = el("div", "result");
+    const info = el("div");
+    info.append(el("div", "name", h.name));
+    if (h.episode) info.append(el("div", "ep", h.episode));
+    info.append(el("div", "where", (h.cached ? "ON THE PI" : "ON THE NAS") + " · " + h.category.toUpperCase()));
+    const b = el("button", "", "PLAY NEXT");
+    b.addEventListener("click", () => post("/api/play", { id: h.id }));
+    row.append(info, b);
+    box.append(row);
+  }
+}
+
+$("skip").addEventListener("click", () => post("/api/skip", { show: false }));
+$("backMain").addEventListener("click", () => post("/api/main"));
+$("volUp").addEventListener("click", () => post("/api/volume", { change: 5 }));
+$("volDown").addEventListener("click", () => post("/api/volume", { change: -5 }));
+$("muteBtn").addEventListener("click", () => post("/api/volume", { mute: true }));
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (guide) renderGuide(guide); }, 150); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { refresh(); loadGuide(); } });
+refresh(); loadGuide();
+setInterval(() => { if (!document.hidden) refresh(); }, 3000);
+setInterval(() => { if (!document.hidden) loadGuide(); }, 30000);
+</script>
+</body>
+</html>

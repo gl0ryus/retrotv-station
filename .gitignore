@@ -1,0 +1,4 @@
+backups/
+legacy/
+__pycache__/
+*.pyc
