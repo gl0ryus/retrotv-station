@@ -1,7 +1,7 @@
 """
-More break-time screens for the GL0RYUS Network: Pop Quiz, Today in History, Launch Watch and
-Who's in Space. Same approach as retrotv_cards (ASS over an mpv lavfi URL); the data comes from free
-public APIs and is cached on the SD card so a flaky connection only means a stale screen.
+More break-time screens for the GL0RYUS Network: Pop Quiz, Today in History, Launch Watch,
+Who's in Space and Markets. Same approach as retrotv_cards (ASS over an mpv lavfi URL); the data comes
+from free public APIs and is cached on the SD card so a flaky connection only means a stale screen.
 """
 import datetime
 import hashlib
@@ -454,6 +454,103 @@ def launch_watch(now):
         place = ("★ " if l["florida"] else "") + clip_text(l["place"], 24)
         s.text(a, d, 944, y, place, BARLOW_S, fit(place, BARLOW_S, 28, 250), color, align=6, fade=fade, layer=3)
     return Card(lavfi_url(s.write("launch"), d, music("space_bed.ogg"), background=SPACE_BACKGROUND), d, "launch")
+
+
+# --- Markets ---
+
+MARKET_BACKGROUND = "0x08140c"
+UP, DOWN = "&H005AE66E&", "&H006060FF&"  # bright enough to read as text on the dark background
+COINGECKO = "https://api.coingecko.com/api/v3/coins/{}/market_chart?vs_currency=usd&days=1"
+SPX_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=1d&interval=5m"
+CHART_W, CHART_H = 200, 66
+
+
+def _crypto(coin):
+    """(price, change % over 24 h, the 24 h of prices) for a CoinGecko coin id, or None."""
+    data = fetch_json(f"markets-{coin}", COINGECKO.format(coin), max_age_minutes=10, stale_hours=6)
+    prices = [p for _, p in (data or {}).get("prices", []) if p]
+    if len(prices) < 2:
+        return None
+    return prices[-1], 100 * (prices[-1] / prices[0] - 1), prices, None
+
+
+def _spx():
+    """(level, change % since the previous close, today's levels from that close, quote time) or None.
+    Out of market hours this is the last session's, which the footer says."""
+    data = fetch_json("markets-spx", SPX_CHART, max_age_minutes=10, stale_hours=96)
+    try:
+        r = data["chart"]["result"][0]
+        price, prev = r["meta"]["regularMarketPrice"], r["meta"]["chartPreviousClose"]
+        closes = [c for c in r["indicators"]["quote"][0]["close"] if c]
+        when = datetime.datetime.fromtimestamp(r["meta"]["regularMarketTime"])
+        return price, 100 * (price / prev - 1), [prev] + closes + [price], when
+    except (TypeError, KeyError, IndexError, ZeroDivisionError):
+        return None
+
+
+def _chart_paths(history):
+    """ASS drawings for a small area chart of `history`: the filled area and a 3px line on top. Both
+    start at 0,0 (the highest point is y=0, the baseline y=CHART_H) so libass places them by that box."""
+    step = max(1, len(history) // 60)
+    pts = history[::step] + ([history[-1]] if (len(history) - 1) % step else [])
+    lo, hi = min(pts), max(pts)
+    span = (hi - lo) or 1.0
+    xy = [(CHART_W * i / (len(pts) - 1), (CHART_H - 3) * (hi - p) / span) for i, p in enumerate(pts)]
+    line = " ".join(f"{x:.0f} {y:.0f}" for x, y in xy)
+    area = f"m 0 {CHART_H} l {line} {CHART_W} {CHART_H}"
+    ribbon = (f"m {xy[0][0]:.0f} {xy[0][1]:.0f} l {line} "
+              + " ".join(f"{x:.0f} {y + 3:.0f}" for x, y in reversed(xy)))
+    return area, ribbon
+
+
+def markets(now):
+    """BTC, ETH and the S&P 500: price, change and a chart of the last 24 hours (the S&P's session so far,
+    from the previous close). None when no quote is available at all."""
+    # Whole dollars and points: cents are noise at TV resolution and only shrink the numbers
+    rows = [(symbol, name, quote, fmt) for symbol, name, quote, fmt in (
+        ("BTC", "Bitcoin", _crypto("bitcoin"), "${:,.0f}"),
+        ("ETH", "Ethereum", _crypto("ethereum"), "${:,.0f}"),
+        ("S&P 500", None, _spx(), "{:,.0f}"),
+    ) if quote]
+    if not rows:
+        return None
+    d = 24.0
+    s = Script()
+    info_header(s, d, "GL0RYUS NETWORK", [(0, d, "Markets")], now, band="&H00142410&")
+    fade = (300, 400)
+    s.text(0.2, d, 320, 206, "LAST 24 HOURS", BARLOW_X, 30, MUSTARD, align=4, spacing=4, fade=fade, layer=3)
+    s.text(0.2, d, 944, 206, "CHANGE", BARLOW_X, 30, MUSTARD, align=6, spacing=4, fade=fade, layer=3)
+    for i, (symbol, name, (price, change, history, when), fmt) in enumerate(rows):
+        y, a = 268 + i * 104, 0.3 + i * 0.25
+        color = UP if change >= 0 else DOWN
+        s.shape(a, d, 80, y + 50, rect(864, 2), "&H00304030&", fade=fade, layer=1)
+        s.text(a, d, 80, y - 16, symbol, ARCHIVO, fit(symbol, ARCHIVO, 48, 220), WHITE, align=4, shadow=3,
+               shadow_color=BLACK, fade=fade, layer=3)
+        # The S&P's quote time stands in for its name: out of market hours it is the last session's
+        if name:
+            sub = name.upper()
+        else:
+            sub = (when.strftime("AS OF %-I:%M %p") if when.date() == now.date()
+                   else when.strftime("%a %-I:%M %p").upper())
+        s.text(a, d, 80, y + 28, sub, BARLOW_X, fit(sub, BARLOW_X, 30, 230, spacing=2), SKY, align=4, spacing=2,
+               fade=fade, layer=3)
+        area, ribbon = _chart_paths(history)
+        s.shape(a, d, 320, y - CHART_H / 2, area, color, fade=fade, layer=2, extra="\\1a&HA0&")
+        s.shape(a, d, 320, y - CHART_H / 2, ribbon, color, fade=fade, layer=3)
+        text = fmt.format(price)
+        s.text(a, d, 760, y, text, BARLOW_X, fit(text, BARLOW_X, 64, 220), YELLOW, align=6, shadow=3,
+               shadow_color=BLACK, fade=fade, layer=3)
+        pct = f"{abs(change):.2f}%"
+        size = fit(pct, BARLOW_X, 50, 140)
+        arrow = "m 11 0 l 22 18 l 0 18" if change >= 0 else "m 0 0 l 22 0 l 11 18"
+        s.shape(a, d, 806, y - 9, arrow, color, fade=fade, layer=3)
+        s.text(a, d, 944, y, pct, BARLOW_X, size, color, align=6, shadow=2, shadow_color=BLACK, fade=fade, layer=3)
+    sources = "CoinGecko"
+    if any(sym == "S&P 500" for sym, *_ in rows):
+        sources = "S&P 500 change vs. prior close · CoinGecko · Yahoo Finance"
+    s.text(0.8, d, 512, 566, sources.upper(), BARLOW_B, 28, "&H00B0B8B0&", spacing=1, fade=fade, layer=3)
+    return Card(lavfi_url(s.write("markets"), d, music("weather_bed.ogg"), background=MARKET_BACKGROUND, loop=True),
+                d, "markets")
 
 
 # --- Who's in Space ---
