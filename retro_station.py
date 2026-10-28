@@ -20,6 +20,7 @@ import retrotv_meta as meta
 import retrotv_remote as remote
 import retrotv_alerts as alerts
 import retrotv_blurbs as blurbs
+import retrotv_archive as archive
 
 # --- Configuration ---
 MEDIA_ROOT = "/mnt/tower/.retrotv"
@@ -55,6 +56,19 @@ LOW_WATER_HOURS = 2        # refill immediately below this
 REFILL_RETRY_MINUTES = 60  # minimum gap between early refills, e.g. while the NAS is offline
 INDEX_MAX_AGE_DAYS = 7     # re-walk the NAS during a refill once the index is this old
 GB = 1024 ** 3
+
+# Public domain video from archive.org (retrotv_archive.py): 50s and 60s TV, old movies, cartoons, short films and
+# commercials, picked automatically and never kept on the NAS. A few of each kind are downloaded just ahead
+# (ARCHIVE_READY), air from the SD card like everything else, and are deleted once they've aired. Between them
+# they get about ARCHIVE_SHARE of the picks in their category (shows, movies, kids' shows, commercials)
+ARCHIVE = True
+ARCHIVE_SHARE = 0.1
+ARCHIVE_READY = {"commercials": 40, "tv": 4, "cartoons": 6, "shorts": 3, "movies": 1}
+ARCHIVE_POOL_GB = 3        # part of CACHE_LIMIT_GB
+ARCHIVE_CHECK_MINUTES = 10
+# Made-up paths for archive.org's files, so the name parsers and broadcast standards read them like NAS files.
+# Nothing is ever stored there
+ARCHIVE_ROOT = os.path.join(MEDIA_ROOT, "archive.org")
 
 # One mpv runs for the life of the station and is fed over its IPC socket, so nothing (not even the
 # console) shows between items. mpv "retrotv" profile (~/.config/mpv/mpv.conf): full screen on the
@@ -371,9 +385,12 @@ def is_tape(src):
     return "/.Tapes/" in src
 
 
-def pool_of(category):
-    """The cache pool a category lives in: commercials and music have their own, the rest are shows."""
-    return category if category in ("commercials", "music") else "shows"
+def pool_of(e):
+    """The cache pool an entry lives in: archive.org's downloads, commercials and music have their own, the
+    rest are shows."""
+    if e.get("archive"):
+        return "archive"
+    return e["category"] if e["category"] in ("commercials", "music") else "shows"
 
 
 MUSIC_TAGS = re.compile(r"\s*[\(\[][^\)\]]*(official|video|audio|lyric|\bhd\b|\bhq\b|remaster|explicit|clean|version|"
@@ -741,10 +758,14 @@ if not off_air(datetime.datetime.now()):
     ON_AIR.set()
 
 
+COPY_LOCK = threading.Lock()  # one copy at a time, so a refill's and an archive.org download don't add up
+
+
 def paced_copy(src, dest, chunk=4 * 1024 * 1024):
-    """Copies src to dest. While on the air it's paced to COPY_MB_PER_SEC_ON_AIR and flushed chunk by chunk,
-    so the SD card is never too busy to feed playback; off the air it runs flat out."""
-    with open(src, "rb") as fin, open(dest, "wb") as fout:
+    """Copies src (a path, or a URL to download) to dest, one copy at a time. While on the air it's paced to
+    COPY_MB_PER_SEC_ON_AIR and flushed chunk by chunk, so the SD card is never too busy to feed playback; off the
+    air it runs flat out."""
+    with COPY_LOCK, (archive.open_url(src) if "://" in src else open(src, "rb")) as fin, open(dest, "wb") as fout:
         while True:
             t0 = time.time()
             buf = fin.read(chunk)
@@ -846,6 +867,7 @@ class CacheManager:
         self.holiday_refill_day = None
         self.music_refill_day = None
         self.wake = threading.Event()
+        self.archive_wake = threading.Event()
         os.makedirs(CACHE_DIR, exist_ok=True)
         self._load_manifest()
         try:
@@ -857,6 +879,8 @@ class CacheManager:
         # Start background thread
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
+        if ARCHIVE:
+            threading.Thread(target=self._archive_worker, daemon=True).start()
 
     def _load_manifest(self):
         try:
@@ -910,12 +934,12 @@ class CacheManager:
         """
         Cached shows that may air at `when`: for each series the next episode in order, plus
         anything that isn't part of a series, plus the season's holiday shows (out of order).
-        Tapes split one TAPE_WEIGHT between them.
+        Tapes split one TAPE_WEIGHT between them, archive.org's downloads ARCHIVE_SHARE of the odds.
         Returns [(src, entry, weight, in_order)].
         """
         hour = broadcast_hour(when)[1]
         season = holiday_season(when.date())
-        out, by_series, tapes = [], {}, []
+        out, by_series, tapes, archived = [], {}, [], []
         with self.lock:
             positions = dict(self.series_pos)
             # Episodes already in the lineup count as aired, so the next pick follows them (and a
@@ -934,7 +958,9 @@ class CacheManager:
                 tag = holiday_tag(src)
                 if tag and tag != season:
                     continue  # a Christmas episode waits for Christmas
-                if is_tape(src):
+                if e.get("archive"):
+                    archived.append((src, e, HOLIDAY_WEIGHT if tag else 1.0))
+                elif is_tape(src):
                     # Odds within the tapes' shared slot: in season, the holiday tape is the likely one
                     tapes.append((src, e, (HOLIDAY_WEIGHT if tag else 1.0) / (1 + 2 * e["plays"])))
                 elif tag:
@@ -955,6 +981,12 @@ class CacheManager:
                 out.append((src, e, max(1, waiting) / (1 + 2 * e["plays"]), True))
         total = sum(w for _, _, w in tapes)
         out += [(src, e, TAPE_WEIGHT * w / total, False) for src, e, w in tapes]
+        if archived:
+            # All of the odds when nothing else is cached
+            others = sum(w for _, _, w, _ in out)
+            share = others * ARCHIVE_SHARE / (1 - ARCHIVE_SHARE) if others else 1.0
+            total = sum(w for _, _, w in archived)
+            out += [(src, e, share * w / total, False) for src, e, w in archived]
         return out
 
     def music_pool(self, when):
@@ -1023,6 +1055,11 @@ class CacheManager:
                         write_json(SERIES_FILE, self.series_pos)
                     except OSError as err:
                         logger.error(f"Could not save series positions: {err}")
+                if e.get("archive"):
+                    # archive.org's downloads go once they've aired, and the archive worker fetches another
+                    del self.entries[src]
+                    self._remove_file(e)
+                    self.archive_wake.set()
         self._save_manifest()
 
         if self.refilling or self.wake.is_set() or time.time() - self.last_refill < REFILL_RETRY_MINUTES * 60:
@@ -1037,23 +1074,27 @@ class CacheManager:
             logger.info("Music videos are running low, refilling early.")
             self.wake.set()
 
+    # The NAS's shows only: archive.org's come and go by themselves, so they don't hold off a refill
+
     def unplayed_hours(self):
         with self.lock:
             return sum(e["duration"] for e in self.entries.values()
-                       if e["category"] in MAIN_CATEGORIES and e["plays"] == 0) / 3600
+                       if e["category"] in MAIN_CATEGORIES and e["plays"] == 0 and not e.get("archive")) / 3600
 
     def unplayed_count(self, category):
         with self.lock:
-            return sum(1 for src, e in self.entries.items() if self._matches(src, e, category) and e["plays"] == 0)
+            return sum(1 for src, e in self.entries.items()
+                       if self._matches(src, e, category) and e["plays"] == 0 and not e.get("archive"))
 
     def stats_line(self):
         with self.lock:
             size = sum(e["size"] for e in self.entries.values())
-            commercials = sum(1 for e in self.entries.values() if e["category"] == "commercials")
+            archived = sum(1 for e in self.entries.values() if e.get("archive"))
+            commercials = sum(1 for e in self.entries.values() if e["category"] == "commercials" and not e.get("archive"))
             music = sum(1 for e in self.entries.values() if e["category"] == "music")
-            shows = len(self.entries) - commercials - music
-        return (f"Cache: {shows} shows, {commercials} commercials, {music} music videos, {size / GB:.1f}GB, "
-                f"{self.unplayed_hours():.1f}h of unplayed shows")
+            shows = len(self.entries) - commercials - music - archived
+        return (f"Cache: {shows} shows, {commercials} commercials, {music} music videos, {archived} from archive.org, "
+                f"{size / GB:.1f}GB, {self.unplayed_hours():.1f}h of unplayed shows")
 
     # --- What to fetch first ---
 
@@ -1118,8 +1159,8 @@ class CacheManager:
         season = holiday_season(now.date()) if urgent else holiday_ahead(now.date())
         if season:
             with self.lock:
-                have = sum(1 for s, e in self.entries.items()
-                           if e["category"] in MAIN_CATEGORIES and e["plays"] == 0 and holiday_tag(s) == season)
+                have = sum(1 for s, e in self.entries.items() if e["category"] in MAIN_CATEGORIES and e["plays"] == 0
+                           and holiday_tag(s) == season and not e.get("archive"))
                 cached = set(self.entries)
             pool = [s for s in self.indexer.holiday_files(season, False) if s not in cached and s not in wanted]
             random.shuffle(pool)
@@ -1140,7 +1181,8 @@ class CacheManager:
         if not season:
             return []
         with self.lock:
-            have = sum(1 for s, e in self.entries.items() if e["category"] == "commercials" and holiday_tag(s) == season)
+            have = sum(1 for s, e in self.entries.items()
+                       if e["category"] == "commercials" and holiday_tag(s) == season and not e.get("archive"))
             cached = set(self.entries)
         pool = [s for s in self.indexer.holiday_files(season, True) if s not in cached]
         return random.sample(pool, min(len(pool), max(0, HOLIDAY_COMMERCIALS_CACHED - have)))
@@ -1270,7 +1312,7 @@ class CacheManager:
         if not category:
             return False
         budget = {"commercials": COMMERCIAL_POOL_GB, "music": MUSIC_POOL_GB,
-                  "shows": CACHE_LIMIT_GB - COMMERCIAL_POOL_GB - MUSIC_POOL_GB}[pool] * GB
+                  "shows": CACHE_LIMIT_GB - COMMERCIAL_POOL_GB - MUSIC_POOL_GB - ARCHIVE_POOL_GB}[pool] * GB
         try:
             size = os.path.getsize(src)
         except FileNotFoundError:
@@ -1315,7 +1357,7 @@ class CacheManager:
         shows), unplayed shows go too, oldest copies first, except the season's own.
         """
         with self.lock:
-            pool = {src: e for src, e in self.entries.items() if pool_of(e["category"]) == which}
+            pool = {src: e for src, e in self.entries.items() if pool_of(e) == which}
             used = sum(e["size"] for e in pool.values())
             free = [src for src in pool if src not in self.reserved]
             played = sorted((src for src in free if pool[src]["plays"] > 0),
@@ -1341,21 +1383,29 @@ class CacheManager:
 
             for src in evict:
                 e = self.entries.pop(src)
-                try:
-                    os.remove(os.path.join(CACHE_DIR, e["file"]))
-                except OSError as err:
-                    logger.error(f"Error deleting {e['file']}: {err}")
+                self._remove_file(e)
                 logger.info(f"Evicted: ({e['category']}) {os.path.basename(src)}")
         if evict:
             self._save_manifest()
         return True
 
+    @staticmethod
+    def _remove_file(e):
+        try:
+            os.remove(os.path.join(CACHE_DIR, e["file"]))
+        except OSError as err:
+            logger.error(f"Error deleting {e['file']}: {err}")
+
+    @staticmethod
+    def _file_name(src):
+        """The cache's name for src: a hash of the full path keeps same-named episodes from different folders apart."""
+        stem, ext = os.path.splitext(os.path.basename(src))
+        stem = stem.encode()[:120].decode(errors="ignore")
+        return f"{hashlib.sha1(src.encode()).hexdigest()[:10]}-{stem}{ext}"
+
     def _copy(self, src, category):
         """Copies via a .part file so an interrupted copy never looks complete."""
-        stem, ext = os.path.splitext(os.path.basename(src))
-        # Hash of the full NAS path keeps same-named episodes from different folders apart
-        stem = stem.encode()[:120].decode(errors="ignore")
-        name = f"{hashlib.sha1(src.encode()).hexdigest()[:10]}-{stem}{ext}"
+        name = self._file_name(src)
         dest = os.path.join(CACHE_DIR, name)
         part = dest + ".part"
         try:
@@ -1370,7 +1420,12 @@ class CacheManager:
                 os.remove(part)
             raise
         os.replace(part, dest)
+        self._register(src, name, category)
+        return True
 
+    def _register(self, src, name, category, **extra):
+        """Adds a file just copied into the cache to the manifest."""
+        dest = os.path.join(CACHE_DIR, name)
         entry = {
             "file": name,
             "category": category,
@@ -1381,11 +1436,56 @@ class CacheManager:
             "last_played": 0,
             "cached": time.time(),
         }
+        entry.update(extra)
         self._describe(src, entry)
         with self.lock:
             self.entries[src] = entry
         self._save_manifest()
-        logger.info(f"Cached: ({category}) {os.path.basename(src)}")
+        logger.info(f"Cached: ({category}{', archive.org' if entry.get('archive') else ''}) {os.path.basename(src)}")
+
+    # --- archive.org, just ahead ---
+
+    def _archive_ready(self, kind):
+        """archive.org downloads of a kind waiting to air."""
+        with self.lock:
+            return sum(1 for e in self.entries.values() if e.get("archive") == kind and e["plays"] == 0)
+
+    def _archive_worker(self):
+        """Keeps ARCHIVE_READY files of each kind downloaded, topping up as soon as one has aired (and every
+        ARCHIVE_CHECK_MINUTES, in case archive.org was down)."""
+        while True:
+            self.archive_wake.clear()
+            for kind, want in ARCHIVE_READY.items():
+                try:
+                    while self._archive_ready(kind) < want and self._archive_one(kind):
+                        pass
+                except Exception as e:
+                    logger.warning(f"archive.org: no {kind} right now ({e})")
+            self.archive_wake.wait(timeout=ARCHIVE_CHECK_MINUTES * 60)
+
+    def _archive_one(self, kind):
+        """Downloads one file of a kind from archive.org into the cache. False when none could be had, or it
+        wouldn't fit."""
+        got = archive.pick(kind)
+        if not got:
+            return False
+        with self.lock:
+            used = sum(e["size"] for e in self.entries.values() if e.get("archive"))
+        if (used + got["size"] > ARCHIVE_POOL_GB * GB
+                or shutil.disk_usage(CACHE_DIR).free - got["size"] < MIN_FREE_GB * GB):
+            return False
+        src = os.path.join(ARCHIVE_ROOT, *got["path"].split("/"))
+        name = self._file_name(src)
+        part = os.path.join(CACHE_DIR, name + ".part")
+        try:
+            paced_copy(got["url"], part)
+        except BaseException:
+            if os.path.exists(part):
+                os.remove(part)
+            raise
+        os.replace(part, os.path.join(CACHE_DIR, name))
+        # Not part of a series: they air as they come
+        self._register(src, name, got["category"], archive=kind, item=got["item"], series=None, order=None)
         return True
 
 
@@ -2536,9 +2636,12 @@ class Station:
         random.shuffle(pool)
 
         pool = [(s, e) for s, e in pool if holiday_tag(s) in (None, season)]  # no Santa ads in July
+        # archive.org's ads get about ARCHIVE_SHARE of the picks between them
+        ours = sum(1 for _, e in pool if e.get("archive"))
+        boost = ARCHIVE_SHARE / (1 - ARCHIVE_SHARE) * (len(pool) - ours) / ours if 0 < ours < len(pool) else 1.0
 
         def weight(src, e):
-            w = 1.0 / (1 + e["plays"])
+            w = (boost if e.get("archive") else 1.0) / (1 + e["plays"])
             if e["duration"] > 75:
                 w *= 0.5  # trailers and long promos now and then, mostly ordinary spots
             y = commercial_year(src)
