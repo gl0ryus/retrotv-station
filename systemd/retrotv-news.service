@@ -1,0 +1,11 @@
+[Unit]
+Description=RetroTV headline quips for the text bumps (retrotv_news.py)
+Wants=network-online.target mnt-tower.mount
+After=network-online.target mnt-tower.mount
+
+[Service]
+Type=oneshot
+User=gl0ryus
+ExecStart=/home/gl0ryus/retrotv_venv/bin/python /mnt/tower/.retrotv/station/retrotv_news.py
+Nice=10
+TimeoutStartSec=300

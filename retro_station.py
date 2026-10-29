@@ -19,6 +19,9 @@ import retrotv_events as events
 import retrotv_meta as meta
 import retrotv_remote as remote
 import retrotv_alerts as alerts
+import retrotv_blurbs as blurbs
+import retrotv_archive as archive
+import retrotv_scores as scores
 
 # --- Configuration ---
 MEDIA_ROOT = "/mnt/tower/.retrotv"
@@ -27,6 +30,7 @@ PATHS = {
     "movies": os.path.join(MEDIA_ROOT, "movies"),
     "videos": os.path.join(MEDIA_ROOT, "videos"),
     "g4": os.path.join(MEDIA_ROOT, "g4"),
+    "music": os.path.join(MEDIA_ROOT, "music_videos"),
 }
 MAIN_CATEGORIES = ["videos", "movies", "g4"]
 VIDEO_EXTENSIONS = ('.mkv', '.mp4', '.avi', '.mov', '.webm', '.flv', '.wmv')
@@ -35,13 +39,15 @@ CACHE_DIR = os.path.join(HOME_DIR, "retrotv_cache")
 MANIFEST_FILE = os.path.join(HOME_DIR, "retrotv_manifest.json")
 # The index lives on the SD card too, so the NAS share can stay read-only and asleep
 INDEX_FILE = os.path.join(HOME_DIR, "retrotv_index.json")
-NAS_INDEX_FILE = os.path.join(MEDIA_ROOT, "media_index.json")  # old shared index, only read to seed a first run
+NAS_INDEX_FILE = os.path.join(MEDIA_ROOT, "station", "legacy", "media_index.json")  # old shared index, only read to seed a first run
 
 # Everything plays from the SD card cache. The NAS is only touched during a refill, which fills
 # the cache back up. That happens at REFILL_HOUR once the cache won't last another day, or right
 # away if it's about to run dry (e.g. the NAS was offline at REFILL_HOUR).
 CACHE_LIMIT_GB = 80        # the SD card has ~100 GB free; this is ~4 days of programming
 COMMERCIAL_POOL_GB = 8     # part of CACHE_LIMIT_GB, roughly 650 commercials
+MUSIC_POOL_GB = 4          # part of CACHE_LIMIT_GB, roughly 250 music videos
+MUSIC_MIN_CACHED = 30      # fewer unplayed music videos than this cached: an early refill (once a day)
 MIN_FREE_GB = 5            # stop a refill early rather than fill the SD card
 COPY_MB_PER_SEC_ON_AIR = 3 # copies while the station is on the air are paced so the SD card can keep feeding
                            # playback (at full speed it was 100% busy and shows stalled); off the air they run flat out
@@ -51,6 +57,19 @@ LOW_WATER_HOURS = 2        # refill immediately below this
 REFILL_RETRY_MINUTES = 60  # minimum gap between early refills, e.g. while the NAS is offline
 INDEX_MAX_AGE_DAYS = 7     # re-walk the NAS during a refill once the index is this old
 GB = 1024 ** 3
+
+# Public domain video from archive.org (retrotv_archive.py): 50s and 60s TV, old movies, cartoons, short films and
+# commercials, picked automatically and never kept on the NAS. A few of each kind are downloaded just ahead
+# (ARCHIVE_READY), air from the SD card like everything else, and are deleted once they've aired. Between them
+# they get about ARCHIVE_SHARE of the picks in their category (shows, movies, kids' shows, commercials)
+ARCHIVE = True
+ARCHIVE_SHARE = 0.1
+ARCHIVE_READY = {"commercials": 40, "tv": 4, "cartoons": 6, "shorts": 3, "movies": 1}
+ARCHIVE_POOL_GB = 3        # part of CACHE_LIMIT_GB
+ARCHIVE_CHECK_MINUTES = 10
+# Made-up paths for archive.org's files, so the name parsers and broadcast standards read them like NAS files.
+# Nothing is ever stored there
+ARCHIVE_ROOT = os.path.join(MEDIA_ROOT, "archive.org")
 
 # One mpv runs for the life of the station and is fed over its IPC socket, so nothing (not even the
 # console) shows between items. mpv "retrotv" profile (~/.config/mpv/mpv.conf): full screen on the
@@ -117,11 +136,22 @@ SPECIALS = {
     "history": 180,  # Today in History from Wikipedia
     "launch": 150,   # Launch Watch from The Space Devs
     "space": 180,    # Who's in Space, with the ISS on a world map
+    "markets": 90,   # BTC, ETH and the S&P 500 with their 24-hour change (CoinGecko, Yahoo Finance)
     "reminder": 120, # a heads-up before Valentine's, Mother's and Father's Day (see REMINDERS)
+    "blurb": 30,     # text bumps: facts, food for thought, dad jokes, raunchier late at night (retrotv_blurbs)
+    "sky": 120,      # Tonight's Sky: the moon, planets and ISS passes over the house, sunset to sign-off
+    "teletext": 150, # G|TV Text: teletext pages of tonight's listings, the weather, markets and odd news
+    "art": 240,      # Art Break: the day's picture, drawn by Claude, building up shape by shape
 }
+# How far the text bumps go: clean until BLURB_CHEEKY_HOUR, cheeky until BLURB_RAUNCHY_HOUR, raunchy to sign-off
+# (crude, never hateful). Always clean in the kids' dayparts
+BLURB_CHEEKY_HOUR = 21
+BLURB_RAUNCHY_HOUR = 23
 SPECIAL_GAP_MINUTES = 10
-WEATHER_PLACE = "Town, ST"
-WEATHER_LAT, WEATHER_LON = 0.0, 0.0
+FRESH_SPECIALS = ("weather",)   # made again with the latest data just before they're queued
+# Where the weather and the emergency alerts are for, kept out of the repo in this file next to the script:
+# {"place": "Town, ST", "lat": 28.0, "lon": -82.5}. Without it there's no weather card and no alerts
+LOCATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "location.json")
 WEATHER_TZ = "America/New_York"
 # Emergency alerts from the National Weather Service for WEATHER_LAT/LON (retrotv_alerts.py). The worst
 # warnings cut into the show with the alert tones and a voice, then it picks up where it left off; other
@@ -133,6 +163,15 @@ ALERT_TEST_HOURS = (10, 19)  # the weekly test airs at a break between shows wit
 # Items a crawl can go over. They all carry per-file vf options, so mpv drops the crawl filter when they end
 CRAWL_KINDS = ("act", "detour", "commercial")
 LOTTERY_HOUR = 23          # the nightly lottery drawing, right before the 11 PM show (None = off)
+# Live scores from ESPN's scoreboard (retrotv_scores.py): while games are on, a SCORES lower third crawls them
+# across a show (not breaks or music videos) every SCORES_MINUTES. The leagues in crawl order, each with the
+# home team whose game leads it in mustard: Bucs, Magic, Lightning, Rays
+SCORES = True
+SCORES_TEAMS = {"nfl": "TB", "nba": "ORL", "nhl": "TB", "mlb": "TB"}
+SCORES_MINUTES = 20
+SCORES_IDLE_MINUTES = 10   # with no games on, look again this often
+SCORES_MAX_SECONDS = 60    # a longer crawl leaves games off the end
+SCORES_CHECK_SECONDS = 15
 
 # Time-of-day programming: the first daypart that matches sets the mix. Days are 0 = Monday ...
 # 5 = Saturday; hours run past 24 for after midnight (26 = 2 AM), still counted as the evening before
@@ -179,11 +218,35 @@ HOLIDAYS = {
     "christmas": ((12, 1), (12, 25)),
     "thanksgiving": (("thanksgiving", -6), ("thanksgiving", 3)),  # the Friday before to the Sunday after
 }
-# Days the station ID dresses up for without a season of programming (there isn't enough of it)
+# Days the station ID and the cards dress up for without a season of programming (there isn't enough of it).
+# On its day one of these wins over a season (Mardi Gras in Valentine's week), and the first match wins
+# among them (Easter over an April Fools' Day Easter, Juneteenth over a Father's Day on June 19)
 HOLIDAY_IDS = {
+    "newyearsday": ((1, 1), (1, 1)),
+    "mlkday": (("mlkday", 0), ("mlkday", 0)),
+    "groundhog": ((2, 2), (2, 2)),
+    "mardigras": (("easter", -47), ("easter", -47)),
     "stpatricks": ((3, 17), (3, 17)),
     "easter": (("easter", 0), ("easter", 0)),
+    "aprilfools": ((4, 1), (4, 1)),
+    "cincodemayo": ((5, 5), (5, 5)),
+    "mothersday": (("mothersday", 0), ("mothersday", 0)),
+    "memorialday": (("memorialday", 0), ("memorialday", 0)),
+    "juneteenth": ((6, 19), (6, 19)),
+    "fathersday": (("fathersday", 0), ("fathersday", 0)),
     "july4": ((7, 4), (7, 4)),
+    "laborday": (("laborday", 0), ("laborday", 0)),
+    "veteransday": ((11, 11), (11, 11)),
+}
+# Heritage months: (first, last) as (month, day). Kept subtle on screen (see retrotv_cards.MONTH_LOOKS), and
+# Today in History and Pop Quiz lean toward them (retrotv_screens.TOPICS)
+MONTHS = {
+    "blackhistory": ((2, 1), (2, 29)),
+    "womenshistory": ((3, 1), (3, 31)),
+    "aapi": ((5, 1), (5, 31)),
+    "pride": ((6, 1), (6, 30)),
+    "hispanic": ((9, 15), (10, 15)),
+    "nativeamerican": ((11, 1), (11, 30)),
 }
 # Heads-ups in the breaks before days you're expected to get someone something or spend time with them:
 # the "reminder" special, from REMINDER_DAYS ahead through the day itself
@@ -201,6 +264,12 @@ SERIES_FILE = os.path.join(HOME_DIR, "retrotv_series.json")
 SERIES_CACHED_AHEAD = 6
 RERUN_HOURS = 12           # nothing airs again within this long (holiday episodes included)
 
+# Tapes (whole recorded broadcasts in videos/shows/.Tapes, often hours long) share one pick between
+# them: together they weigh TAPE_WEIGHT, about as much as one series, and at most TAPES_CACHED
+# unplayed tapes are kept on the SD card
+TAPE_WEIGHT = 1.0
+TAPES_CACHED = 3
+
 # Marathons: (name, days, start hour, end hour). One series back to back for the whole block; the
 # series rotates weekly through MARATHON_SERIES (MARATHON_EPOCH is a Monday in the week of the first)
 MARATHONS = [("Friday Night Marathon", (4,), 20, 24)]
@@ -211,12 +280,43 @@ MARATHON_EPOCH = datetime.date(2026, 10, 26)
 MARATHON_EPISODES = 10     # cached ahead of the block
 MARATHON_PREP_DAYS = 3
 
+# Music video blocks: videos back to back filling a slot on the grid, each with its artist and song
+# in a lower third, and a commercial break about every 20 minutes. MUSIC_BLOCKS air at set times:
+# (name, days, start hour, minutes). Otherwise a half-hour MUSIC_BLOCK_NAME turns up now and then in
+# the regular lineup: MUSIC_CHANCE per slot, never two in a row, not in the kids' dayparts.
+MUSIC_BLOCKS = [("After School Videos", (0, 1, 2, 3, 4), 15.5, 60),
+                ("Saturday Night Videos", (5,), 22, 60)]
+MUSIC_BLOCK_NAME = "Music Videos"
+MUSIC_CHANCE = 0.06
+MUSIC_VIDEO_SECONDS = (90, 480)   # videos outside this length stay out of the blocks
+MUSIC_TITLE_AT = 4.0              # seconds into each video for its lower third
+MUSIC_TITLE_SECONDS = 4.5         # per panel: NOW · ARTIST, then YEAR · SONG
+MUSIC_MIN_FILL = 0.8              # a block airs only if its cached videos fill this much of it
+# These blocks open with the Weekly Countdown (Last.fm, screens.countdown), then the video of the best placed
+# artist in it that's cached
+COUNTDOWN_BLOCKS = ("After School Videos", "Saturday Night Videos")
+POPUP_VIDEO = True   # VH1-style fact bubbles over the music videos that have facts (retrotv_news.py finds them)
+
 # Effects
 GLITCH_MINUTES = (40, 80)  # a 1-second tracking roll or interference burst about this often (None = off)
+
+# Panorama stretch: a picture narrower than the screen (4:3 shows, most old ads) fills it without
+# cropping. The middle keeps its true shape and the stretch grows toward the edges, in STRETCH_STRIPS
+# vertical strips: each strip's widening follows 1 + a·x^STRETCH_POWER (x = 0 at the centre, 1 at an
+# edge). A picture is stretched by at most STRETCH_MAX; anything narrower keeps black side bars.
+# Pictures as wide as the screen or wider are left to mpv.conf's crop, as before.
+STRETCH = True
+STRETCH_STRIPS = 16
+STRETCH_POWER = 2
+STRETCH_MAX = 1.45
+STAGE_W, STAGE_H = 512, 300   # mpv.conf's square-pixel 300-line stage (the cards render at this size too)
 SNIPE_SECONDS = 30         # a "NEXT: ..." lower third for the last seconds of a show (0 = off)
 PROMO_AT = 8.0             # seconds into a show for the NEXT / LATER / TONIGHT lower third (0 = off)
 PROMO_PANEL_SECONDS = 4.5
 TONIGHT_HOUR = 20          # TONIGHT names the show planned for this hour, until shows near it
+# The day's anniversary episode (picked by retrotv_news.py: first aired on this date years ago) goes next in
+# line at the first show from this hour on that its rating allows, after a From the Vault card
+ANNIVERSARY_HOUR = 20
 
 # Phone remote and live guide on the home Wi-Fi: http://retrotv.local/
 REMOTE_PORT = 80
@@ -225,7 +325,7 @@ REMOTE_STATE_FILE = os.path.join(HOME_DIR, "retrotv_remote.json")
 # The remote's TV guide: the main channel on top, then make-believe channels filled from the cached shows.
 # Picking a show on one plays it right away ("changing the channel"); when it ends the set goes back to the
 # main channel and joins whatever it has on by then. (number, name, kind); "season" only shows in season
-MAIN_CHANNEL = (3, "G|TV")
+MAIN_CHANNEL = (3, cards.CHANNEL)
 CHANNELS = [
     (4, "TOON TOWN", "kids"),
     (5, "G4", "g4"),
@@ -253,6 +353,20 @@ logging.basicConfig(
 logger = logging.getLogger("RetroTV")
 
 td = datetime.timedelta
+
+
+def load_location():
+    """(place, lat, lon) from LOCATION_FILE, or Nones without it."""
+    try:
+        with open(LOCATION_FILE) as f:
+            here = json.load(f)
+        return str(here["place"]), float(here["lat"]), float(here["lon"])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        logger.warning(f"No location ({e}): no weather card or emergency alerts")
+        return None, None, None
+
+
+WEATHER_PLACE, WEATHER_LAT, WEATHER_LON = load_location()
 
 
 def write_json(path, data):
@@ -284,6 +398,14 @@ def mix_at(day, hour):
     return DEFAULT_MIX
 
 
+def blurb_level(t):
+    """How far a text bump airing at t can go: "clean", "cheeky" or "raunchy" (see BLURB_CHEEKY_HOUR)."""
+    day, hour = broadcast_hour(t)   # after midnight counts as hour 24, 25, ...
+    if "kids" in mix_at(day, hour) or hour < BLURB_CHEEKY_HOUR:
+        return "clean"
+    return "raunchy" if hour >= BLURB_RAUNCHY_HOUR else "cheeky"
+
+
 def roll_category(when=None):
     """Main content mix for the daypart at `when` (default: now)."""
     mix = mix_at(*broadcast_hour(when or datetime.datetime.now()))
@@ -292,6 +414,31 @@ def roll_category(when=None):
 
 def base_category(category):
     return "videos" if category == "kids" else category
+
+
+def is_tape(src):
+    return "/.Tapes/" in src
+
+
+def pool_of(e):
+    """The cache pool an entry lives in: archive.org's downloads, commercials and music have their own, the
+    rest are shows."""
+    if e.get("archive"):
+        return "archive"
+    return e["category"] if e["category"] in ("commercials", "music") else "shows"
+
+
+# Parsed in retrotv_meta, which retrotv_news.py shares
+music_credit, artist_key = meta.music_credit, meta.artist_key
+
+
+def popup_facts():
+    """{meta.popup_key: {"facts": [...], ...}} for the music videos that have Pop-Up Video facts."""
+    try:
+        with open(screens.POPUPS_FILE) as f:
+            return dict(json.load(f).get("videos", {}))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return {}
 
 
 def off_air(t):
@@ -388,6 +535,9 @@ FLOATING_DAYS = {
     "thanksgiving": lambda year: nth_weekday(year, 11, 3, 4),  # fourth Thursday in November
     "mothersday": lambda year: nth_weekday(year, 5, 6, 2),     # second Sunday in May
     "fathersday": lambda year: nth_weekday(year, 6, 6, 3),     # third Sunday in June
+    "mlkday": lambda year: nth_weekday(year, 1, 0, 3),         # third Monday in January
+    "memorialday": lambda year: nth_weekday(year, 6, 0, 1) - td(days=7),  # last Monday in May
+    "laborday": lambda year: nth_weekday(year, 9, 0, 1),       # first Monday in September
 }
 
 
@@ -407,8 +557,13 @@ def holiday_season(day, holidays=None):
 
 
 def holiday_look(day):
-    """How the station ID dresses up today: the season's look, or a one-day holiday's."""
-    return holiday_season(day) or holiday_season(day, HOLIDAY_IDS)
+    """How the station ID and the cards dress up today: a holiday day's look, or the season's."""
+    return holiday_season(day, HOLIDAY_IDS) or holiday_season(day)
+
+
+def heritage_month(day):
+    """The heritage month (MONTHS) a day falls in, or None."""
+    return next((name for name, (first, last) in MONTHS.items() if first <= (day.month, day.day) <= last), None)
 
 
 def next_reminder(day):
@@ -514,8 +669,8 @@ class MediaIndexer:
                 titles.append((src, cat, name, episode, f"{name} {episode}".lower()))
         for eps in series.values():
             eps.sort()
-        for cat, files in media_map.items():
-            for src in files:
+        for cat in MAIN_CATEGORIES + ["commercials"]:   # music videos keep to their own pool
+            for src in media_map.get(cat, []):
                 tag = holiday_tag(src)
                 if tag:
                     holidays.setdefault((tag, cat == "commercials"), []).append(src)
@@ -545,6 +700,10 @@ class MediaIndexer:
                 self.media_map.update(data.get("media_map", {}))
                 self.last_index_time = data.get("timestamp", 0)
                 logger.info(f"Loaded index from {path}")
+                missing = [k for k in PATHS if k not in data.get("media_map", {})]
+                if missing:
+                    logger.info(f"Index has no {', '.join(missing)} yet, re-walking the NAS at the next refill.")
+                    self.last_index_time = 0
                 self._derive()
                 if path != INDEX_FILE:
                     self.save_index()
@@ -613,10 +772,14 @@ if not off_air(datetime.datetime.now()):
     ON_AIR.set()
 
 
+COPY_LOCK = threading.Lock()  # one copy at a time, so a refill's and an archive.org download don't add up
+
+
 def paced_copy(src, dest, chunk=4 * 1024 * 1024):
-    """Copies src to dest. While on the air it's paced to COPY_MB_PER_SEC_ON_AIR and flushed chunk by chunk,
-    so the SD card is never too busy to feed playback; off the air it runs flat out."""
-    with open(src, "rb") as fin, open(dest, "wb") as fout:
+    """Copies src (a path, or a URL to download) to dest, one copy at a time. While on the air it's paced to
+    COPY_MB_PER_SEC_ON_AIR and flushed chunk by chunk, so the SD card is never too busy to feed playback; off the
+    air it runs flat out."""
+    with COPY_LOCK, (archive.open_url(src) if "://" in src else open(src, "rb")) as fin, open(dest, "wb") as fout:
         while True:
             t0 = time.time()
             buf = fin.read(chunk)
@@ -645,6 +808,58 @@ def get_video_duration(file_path):
         return 0.0
 
 
+def probe_aspect(path):
+    """A video file's display aspect ratio (width × sample aspect / height, rotation applied), or None."""
+    try:
+        out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                              "stream=width,height,sample_aspect_ratio:stream_side_data=rotation",
+                              "-of", "json", path], capture_output=True, text=True, timeout=15).stdout
+        s = json.loads(out)["streams"][0]
+        w, h = int(s["width"]), int(s["height"])
+        num, _, den = (s.get("sample_aspect_ratio") or "1:1").partition(":")
+        sar = int(num) / int(den) if num.isdigit() and den.isdigit() and int(num) and int(den) else 1.0
+        rotated = any(abs(int(d.get("rotation", 0))) % 180 == 90 for d in s.get("side_data_list", []))
+        return (h / (w * sar)) if rotated else (w * sar / h)
+    except Exception:
+        return None
+
+
+@functools.lru_cache(maxsize=16)
+def display_aspect(path):
+    """probe_aspect, remembered: for the station's own files outside the cache (bumper, static, off air)."""
+    return probe_aspect(path)
+
+
+def stretch_filter(dar):
+    """An mpv vf-pre that panorama-stretches a picture of display aspect `dar` onto the 512x300 stage, or
+    None when it needs none (as wide as the screen or wider, or unknown)."""
+    if not dar or dar >= STAGE_W / STAGE_H - 0.01:
+        return None
+    width = max(2, round(STAGE_H * dar / 2) * 2)          # its true width at 300 lines
+    s = min(STRETCH_MAX, STAGE_W / width)
+    target = min(STAGE_W, round(width * s / 2) * 2)
+    n, p = STRETCH_STRIPS, STRETCH_POWER
+    a = (p + 1) * (target / width - 1)                    # so the strips add up to `target`
+
+    def out_x(sx):
+        """Output position of source column sx, centred mapping x + a·x^(p+1)/(p+1)."""
+        x = 2 * sx / width - 1
+        q = x + a / (p + 1) * math.copysign(abs(x) ** (p + 1), x)
+        return round(target / 4 * (1 + q / (1 + a / (p + 1)))) * 2
+    # Strip edges and widths stay even: on 4:2:0 frames crop rounds odd ones down, dropping columns
+    src = [round(width * j / n / 2) * 2 for j in range(n + 1)]
+    dst = [out_x(sx) for sx in src]
+    parts = [f"scale=w={width}:h={STAGE_H}:flags=bilinear,setsar=1,split={n}" + "".join(f"[s{j}]" for j in range(n))]
+    for j in range(n):
+        parts.append(f"[s{j}]crop={src[j + 1] - src[j]}:{STAGE_H}:{src[j]}:0,"
+                     f"scale={max(2, dst[j + 1] - dst[j])}:{STAGE_H}:flags=bilinear[t{j}]")
+    tail = "".join(f"[t{j}]" for j in range(n)) + f"hstack=inputs={n},setsar=1"
+    if target < STAGE_W:
+        tail += f",pad={STAGE_W}:{STAGE_H}:{(STAGE_W - target) // 2}:0:black"
+    parts.append(tail)
+    return "lavfi=[" + ";".join(parts) + "]"
+
+
 class CacheManager:
     """
     Keeps a pool of shows and a pool of commercials on the SD card and tops both up from
@@ -664,7 +879,9 @@ class CacheManager:
         self.refilling = False
         self.last_refill = 0
         self.holiday_refill_day = None
+        self.music_refill_day = None
         self.wake = threading.Event()
+        self.archive_wake = threading.Event()
         os.makedirs(CACHE_DIR, exist_ok=True)
         self._load_manifest()
         try:
@@ -676,6 +893,8 @@ class CacheManager:
         # Start background thread
         self.thread = threading.Thread(target=self._worker, daemon=True)
         self.thread.start()
+        if ARCHIVE:
+            threading.Thread(target=self._archive_worker, daemon=True).start()
 
     def _load_manifest(self):
         try:
@@ -729,11 +948,12 @@ class CacheManager:
         """
         Cached shows that may air at `when`: for each series the next episode in order, plus
         anything that isn't part of a series, plus the season's holiday shows (out of order).
+        Tapes split one TAPE_WEIGHT between them, archive.org's downloads ARCHIVE_SHARE of the odds.
         Returns [(src, entry, weight, in_order)].
         """
         hour = broadcast_hour(when)[1]
         season = holiday_season(when.date())
-        out, by_series = [], {}
+        out, by_series, tapes, archived = [], {}, [], []
         with self.lock:
             positions = dict(self.series_pos)
             # Episodes already in the lineup count as aired, so the next pick follows them (and a
@@ -752,7 +972,12 @@ class CacheManager:
                 tag = holiday_tag(src)
                 if tag and tag != season:
                     continue  # a Christmas episode waits for Christmas
-                if tag:
+                if e.get("archive"):
+                    archived.append((src, e, HOLIDAY_WEIGHT if tag else 1.0))
+                elif is_tape(src):
+                    # Odds within the tapes' shared slot: in season, the holiday tape is the likely one
+                    tapes.append((src, e, (HOLIDAY_WEIGHT if tag else 1.0) / (1 + 2 * e["plays"])))
+                elif tag:
                     out.append((src, e, HOLIDAY_WEIGHT / (1 + 3 * e["plays"]), False))
                 elif e.get("series"):
                     by_series.setdefault(e["series"], []).append((src, e))
@@ -768,7 +993,26 @@ class CacheManager:
                 src, e = ahead[0]
                 waiting = sum(1 for _, x in ahead if x["plays"] == 0)
                 out.append((src, e, max(1, waiting) / (1 + 2 * e["plays"]), True))
+        total = sum(w for _, _, w in tapes)
+        out += [(src, e, TAPE_WEIGHT * w / total, False) for src, e, w in tapes]
+        if archived:
+            # All of the odds when nothing else is cached
+            others = sum(w for _, _, w, _ in out)
+            share = others * ARCHIVE_SHARE / (1 - ARCHIVE_SHARE) if others else 1.0
+            total = sum(w for _, _, w in archived)
+            out += [(src, e, share * w / total, False) for src, e, w in archived]
         return out
+
+    def music_pool(self, when):
+        """Cached music videos that may air at `when`, not already booked for a block. A holiday's
+        videos wait for its season, like its shows."""
+        hour = broadcast_hour(when)[1]
+        season = holiday_season(when.date())
+        with self.lock:
+            return [(src, e) for src, e in self.entries.items()
+                    if e["category"] == "music" and src not in self.reserved and allowed(src, hour)
+                    and MUSIC_VIDEO_SECONDS[0] <= e["duration"] <= MUSIC_VIDEO_SECONDS[1]
+                    and holiday_tag(src) in (None, season)]
 
     def commercial_pool(self, hour):
         """Cached commercials allowed at broadcast hour `hour`, not already booked for a break."""
@@ -790,6 +1034,22 @@ class CacheManager:
         with self.lock:
             self.reserved.discard(src)
 
+    def aspect(self, path):
+        """The display aspect of a cached file, saved when it was copied. Older copies (and a probe that
+        failed) are probed now; a good answer is kept and saved with the manifest next time."""
+        name = os.path.basename(path)
+        with self.lock:
+            e = next((e for e in self.entries.values() if e["file"] == name), None)
+            if e is None:
+                return None
+            if e.get("aspect"):
+                return e["aspect"]
+        dar = probe_aspect(path)
+        if dar:
+            with self.lock:
+                e["aspect"] = dar
+        return dar
+
     def set_breaks(self, src, breaks):
         with self.lock:
             if src in self.entries:
@@ -809,6 +1069,11 @@ class CacheManager:
                         write_json(SERIES_FILE, self.series_pos)
                     except OSError as err:
                         logger.error(f"Could not save series positions: {err}")
+                if e.get("archive"):
+                    # archive.org's downloads go once they've aired, and the archive worker fetches another
+                    del self.entries[src]
+                    self._remove_file(e)
+                    self.archive_wake.set()
         self._save_manifest()
 
         if self.refilling or self.wake.is_set() or time.time() - self.last_refill < REFILL_RETRY_MINUTES * 60:
@@ -819,23 +1084,31 @@ class CacheManager:
         elif self._holiday_short():
             logger.info("Holiday shows are running low, refilling early.")
             self.wake.set()
+        elif self._music_short():
+            logger.info("Music videos are running low, refilling early.")
+            self.wake.set()
+
+    # The NAS's shows only: archive.org's come and go by themselves, so they don't hold off a refill
 
     def unplayed_hours(self):
         with self.lock:
             return sum(e["duration"] for e in self.entries.values()
-                       if e["category"] in MAIN_CATEGORIES and e["plays"] == 0) / 3600
+                       if e["category"] in MAIN_CATEGORIES and e["plays"] == 0 and not e.get("archive")) / 3600
 
     def unplayed_count(self, category):
         with self.lock:
-            return sum(1 for src, e in self.entries.items() if self._matches(src, e, category) and e["plays"] == 0)
+            return sum(1 for src, e in self.entries.items()
+                       if self._matches(src, e, category) and e["plays"] == 0 and not e.get("archive"))
 
     def stats_line(self):
         with self.lock:
             size = sum(e["size"] for e in self.entries.values())
-            commercials = sum(1 for e in self.entries.values() if e["category"] == "commercials")
-            shows = len(self.entries) - commercials
-        return (f"Cache: {shows} shows, {commercials} commercials, {size / GB:.1f}GB, "
-                f"{self.unplayed_hours():.1f}h of unplayed shows")
+            archived = sum(1 for e in self.entries.values() if e.get("archive"))
+            commercials = sum(1 for e in self.entries.values() if e["category"] == "commercials" and not e.get("archive"))
+            music = sum(1 for e in self.entries.values() if e["category"] == "music")
+            shows = len(self.entries) - commercials - music - archived
+        return (f"Cache: {shows} shows, {commercials} commercials, {music} music videos, {archived} from archive.org, "
+                f"{size / GB:.1f}GB, {self.unplayed_hours():.1f}h of unplayed shows")
 
     # --- What to fetch first ---
 
@@ -844,6 +1117,11 @@ class CacheManager:
         pos = self.series_pos.get(key)
         return [e for e in self.entries.values()
                 if e.get("series") == key and e["plays"] == 0 and (pos is None or e["order"] > pos)]
+
+    def _tapes_waiting(self):
+        """Unplayed tapes on the SD card."""
+        with self.lock:
+            return sum(1 for src, e in self.entries.items() if is_tape(src) and e["plays"] == 0)
 
     def _next_episodes(self, key, count, holiday=None):
         """Up to `count` episodes of a series to copy next, so the cache holds a run in order. With
@@ -884,7 +1162,13 @@ class CacheManager:
         """Shows to copy before anything else: the next marathon's episodes, then the season's shows.
         urgent: only what's needed today (a marathon within a day, a season that's already on)."""
         now = datetime.datetime.now()
-        wanted = []
+        with self.lock:
+            cached = set(self.entries)
+        today = broadcast_date(now)
+        held = [a["src"] for a in screens.anniversaries(today, today + td(days=1)).values()]
+        for src in held:
+            self.reserve(src)   # an anniversary episode waits for its slot (Station._queue_anniversary)
+        wanted = [src for src in held if src not in cached]
         for name, day, key in upcoming_marathons(now, self.indexer, 1 if urgent else MARATHON_PREP_DAYS):
             season = holiday_season(day)
             with self.lock:
@@ -895,11 +1179,21 @@ class CacheManager:
         season = holiday_season(now.date()) if urgent else holiday_ahead(now.date())
         if season:
             with self.lock:
-                have = sum(1 for s, e in self.entries.items()
-                           if e["category"] in MAIN_CATEGORIES and e["plays"] == 0 and holiday_tag(s) == season)
+                have = sum(1 for s, e in self.entries.items() if e["category"] in MAIN_CATEGORIES and e["plays"] == 0
+                           and holiday_tag(s) == season and not e.get("archive"))
                 cached = set(self.entries)
             pool = [s for s in self.indexer.holiday_files(season, False) if s not in cached and s not in wanted]
-            wanted += random.sample(pool, min(len(pool), max(0, HOLIDAY_SHOWS_CACHED - have)))
+            random.shuffle(pool)
+            tape_room = TAPES_CACHED - self._tapes_waiting()
+            for src in pool:
+                if have >= HOLIDAY_SHOWS_CACHED:
+                    break
+                if is_tape(src):
+                    if tape_room <= 0:
+                        continue
+                    tape_room -= 1
+                wanted.append(src)
+                have += 1
         return wanted
 
     def _wanted_commercials(self):
@@ -907,7 +1201,8 @@ class CacheManager:
         if not season:
             return []
         with self.lock:
-            have = sum(1 for s, e in self.entries.items() if e["category"] == "commercials" and holiday_tag(s) == season)
+            have = sum(1 for s, e in self.entries.items()
+                       if e["category"] == "commercials" and holiday_tag(s) == season and not e.get("archive"))
             cached = set(self.entries)
         pool = [s for s in self.indexer.holiday_files(season, True) if s not in cached]
         return random.sample(pool, min(len(pool), max(0, HOLIDAY_COMMERCIALS_CACHED - have)))
@@ -920,8 +1215,21 @@ class CacheManager:
         self.holiday_refill_day = today
         return True
 
+    def _music_short(self):
+        """True (once a day) when fewer than MUSIC_MIN_CACHED unplayed music videos are cached and the
+        NAS has more to give."""
+        today = datetime.date.today()
+        if self.music_refill_day == today or self.unplayed_count("music") >= MUSIC_MIN_CACHED:
+            return False
+        with self.lock:
+            cached = set(self.entries)
+        if not self.indexer.get_random("music", exclude=cached):
+            return False
+        self.music_refill_day = today
+        return True
+
     def _worker(self):
-        if self.unplayed_hours() < LOW_WATER_HOURS or self._holiday_short():
+        if self.unplayed_hours() < LOW_WATER_HOURS or self._holiday_short() or self._music_short():
             self._safe_refill()
         while True:
             now = datetime.datetime.now()
@@ -932,7 +1240,8 @@ class CacheManager:
             while not self.wake.is_set() and datetime.datetime.now() < next_run:
                 self.wake.wait(timeout=600)
             hours = self.unplayed_hours()
-            if self.wake.is_set() or hours < REFILL_BELOW_HOURS or self._wanted_shows() or self._wanted_commercials():
+            if (self.wake.is_set() or hours < REFILL_BELOW_HOURS or self.indexer.is_stale()
+                    or self._wanted_shows() or self._wanted_commercials()):
                 self._safe_refill()
             else:
                 logger.info(f"Refill check: {hours:.1f}h of unplayed shows cached, leaving the NAS asleep.")
@@ -945,7 +1254,7 @@ class CacheManager:
             logger.error(f"Refill failed: {e}")
 
     def refill(self):
-        """Wakes the NAS once, tops up both pools, and refreshes the index if it's old."""
+        """Wakes the NAS once, tops up the pools, and refreshes the index if it's old."""
         self.refilling = True
         start = time.time()
         copied = 0
@@ -954,31 +1263,27 @@ class CacheManager:
                 logger.error(f"Refill skipped: NAS not reachable at {MEDIA_ROOT}")
                 return
             logger.info(f"Refill starting. {self.stats_line()}")
-            # Marathon episodes and holiday shows first, making room even if that means unplayed shows go
-            for src in self._wanted_shows():
-                if self._fetch_into_pool(src, commercial=False, force=True):
-                    copied += 1
-            for src in self._wanted_commercials():
-                if self._fetch_into_pool(src, commercial=True, force=True):
-                    copied += 1
-            shows_full = commercials_full = False
-            # Interleave so a cold cache gets a playable block (a show and its commercials) early
-            while not (shows_full and commercials_full):
-                if not shows_full:
-                    if self._fill_one(commercial=False):
-                        copied += 1
-                    else:
-                        shows_full = True
-                for _ in range(6):
-                    if commercials_full:
-                        break
-                    if self._fill_one(commercial=True):
-                        copied += 1
-                    else:
-                        commercials_full = True
-
+            # An old index first, so this refill can already copy what's new on the NAS
             if self.indexer.is_stale():
                 self.indexer.run_indexer()
+            # Marathon episodes and holiday shows first, making room even if that means unplayed shows go
+            for src in self._wanted_shows():
+                if self._fetch_into_pool(src, "shows", force=True):
+                    copied += 1
+            for src in self._wanted_commercials():
+                if self._fetch_into_pool(src, "commercials", force=True):
+                    copied += 1
+            full = {"shows": False, "commercials": False, "music": False}
+            # Interleave so a cold cache gets a playable block (a show and its commercials) early
+            while not all(full.values()):
+                for pool, turns in (("shows", 1), ("commercials", 6), ("music", 2)):
+                    for _ in range(turns):
+                        if full[pool]:
+                            break
+                        if self._fill_one(pool):
+                            copied += 1
+                        else:
+                            full[pool] = True
         except OSError as e:
             logger.error(f"Refill aborted, NAS problem? {e}")
         finally:
@@ -996,35 +1301,38 @@ class CacheManager:
         mix = mix_at(day, hour)
         return random.choices(list(mix), weights=list(mix.values()))[0]
 
-    def _fill_one(self, commercial):
-        """Copies one new file into the show or commercial pool. Returns False once that pool is full."""
+    def _fill_one(self, pool):
+        """Copies one new file into a pool ("shows", "commercials" or "music"). False once that pool is full."""
         for attempt in range(5):  # a few tries, so one movie that doesn't fit doesn't end the refill
-            category = "commercials" if commercial else self._fill_category(attempt)
+            category = pool if pool != "shows" else self._fill_category(attempt)
             with self.lock:
                 cached = set(self.entries)
             src = self.indexer.get_random(category, exclude=cached)
             if not src:
                 continue
-            if not commercial:
+            if pool == "shows":
                 # A random pick decides the series; copy that series' next episode so it can air in order
                 key, order = self.indexer.info(src)
                 if key:
                     src = self._next_episode(key)
                     if not src:
                         continue
-            result = self._fetch_into_pool(src, commercial)
+                if is_tape(src) and self._tapes_waiting() >= TAPES_CACHED:
+                    continue
+            result = self._fetch_into_pool(src, pool)
             if result is None:
                 return False
             if result:
                 return True
         return False
 
-    def _fetch_into_pool(self, src, commercial, force=False):
+    def _fetch_into_pool(self, src, pool, force=False):
         """Copies src if it fits the pool. True when copied, False when skipped, None when the SD card is full."""
-        category = "commercials" if commercial else self.indexer.category_of(src)
+        category = "commercials" if pool == "commercials" else self.indexer.category_of(src)
         if not category:
             return False
-        budget = (COMMERCIAL_POOL_GB if commercial else CACHE_LIMIT_GB - COMMERCIAL_POOL_GB) * GB
+        budget = {"commercials": COMMERCIAL_POOL_GB, "music": MUSIC_POOL_GB,
+                  "shows": CACHE_LIMIT_GB - COMMERCIAL_POOL_GB - MUSIC_POOL_GB - ARCHIVE_POOL_GB}[pool] * GB
         try:
             size = os.path.getsize(src)
         except FileNotFoundError:
@@ -1032,7 +1340,7 @@ class CacheManager:
                 raise
             self.indexer.remove(src)
             return False
-        if not self._make_room(commercial, size, budget, force):
+        if not self._make_room(pool, size, budget, force):
             return False
         if shutil.disk_usage(CACHE_DIR).free - size < MIN_FREE_GB * GB:
             logger.warning("SD card is nearly full, stopping the refill early.")
@@ -1052,7 +1360,7 @@ class CacheManager:
         def run():
             ok = False
             try:
-                ok = bool(self._fetch_into_pool(src, commercial=False, force=True))
+                ok = bool(self._fetch_into_pool(src, "shows", force=True))
             except Exception as e:
                 logger.error(f"Could not fetch {os.path.basename(src)}: {e}")
             with self.lock:
@@ -1062,14 +1370,14 @@ class CacheManager:
         threading.Thread(target=run, daemon=True).start()
         return True
 
-    def _make_room(self, commercial, size, budget, force=False):
+    def _make_room(self, which, size, budget, force=False):
         """
         Evicts from a pool until size fits: played items first (most plays, longest ago first), then
         unplayed episodes their series has already passed. With force (marathon, holiday and requested
         shows), unplayed shows go too, oldest copies first, except the season's own.
         """
         with self.lock:
-            pool = {src: e for src, e in self.entries.items() if (e["category"] == "commercials") == commercial}
+            pool = {src: e for src, e in self.entries.items() if pool_of(e) == which}
             used = sum(e["size"] for e in pool.values())
             free = [src for src in pool if src not in self.reserved]
             played = sorted((src for src in free if pool[src]["plays"] > 0),
@@ -1095,21 +1403,29 @@ class CacheManager:
 
             for src in evict:
                 e = self.entries.pop(src)
-                try:
-                    os.remove(os.path.join(CACHE_DIR, e["file"]))
-                except OSError as err:
-                    logger.error(f"Error deleting {e['file']}: {err}")
+                self._remove_file(e)
                 logger.info(f"Evicted: ({e['category']}) {os.path.basename(src)}")
         if evict:
             self._save_manifest()
         return True
 
+    @staticmethod
+    def _remove_file(e):
+        try:
+            os.remove(os.path.join(CACHE_DIR, e["file"]))
+        except OSError as err:
+            logger.error(f"Error deleting {e['file']}: {err}")
+
+    @staticmethod
+    def _file_name(src):
+        """The cache's name for src: a hash of the full path keeps same-named episodes from different folders apart."""
+        stem, ext = os.path.splitext(os.path.basename(src))
+        stem = stem.encode()[:120].decode(errors="ignore")
+        return f"{hashlib.sha1(src.encode()).hexdigest()[:10]}-{stem}{ext}"
+
     def _copy(self, src, category):
         """Copies via a .part file so an interrupted copy never looks complete."""
-        stem, ext = os.path.splitext(os.path.basename(src))
-        # Hash of the full NAS path keeps same-named episodes from different folders apart
-        stem = stem.encode()[:120].decode(errors="ignore")
-        name = f"{hashlib.sha1(src.encode()).hexdigest()[:10]}-{stem}{ext}"
+        name = self._file_name(src)
         dest = os.path.join(CACHE_DIR, name)
         part = dest + ".part"
         try:
@@ -1124,21 +1440,88 @@ class CacheManager:
                 os.remove(part)
             raise
         os.replace(part, dest)
+        self._register(src, name, category)
+        return True
 
+    def _register(self, src, name, category, **extra):
+        """Adds a file just copied into the cache to the manifest."""
+        dest = os.path.join(CACHE_DIR, name)
         entry = {
             "file": name,
             "category": category,
             "size": os.path.getsize(dest),
             "duration": get_video_duration(dest),
+            "aspect": probe_aspect(dest),
             "plays": 0,
             "last_played": 0,
             "cached": time.time(),
         }
+        entry.update(extra)
         self._describe(src, entry)
         with self.lock:
             self.entries[src] = entry
         self._save_manifest()
-        logger.info(f"Cached: ({category}) {os.path.basename(src)}")
+        logger.info(f"Cached: ({category}{', archive.org' if entry.get('archive') else ''}) {os.path.basename(src)}")
+
+    # --- archive.org, just ahead ---
+
+    def _archive_ready(self, kind):
+        """archive.org downloads of a kind waiting to air."""
+        with self.lock:
+            return sum(1 for e in self.entries.values() if e.get("archive") == kind and e["plays"] == 0)
+
+    def _archive_worker(self):
+        """Keeps ARCHIVE_READY files of each kind downloaded, topping up as soon as one has aired (and every
+        ARCHIVE_CHECK_MINUTES, in case archive.org was down)."""
+        while True:
+            self.archive_wake.clear()
+            self._archive_prune()
+            for kind, want in ARCHIVE_READY.items():
+                try:
+                    while self._archive_ready(kind) < want and self._archive_one(kind):
+                        pass
+                except Exception as e:
+                    logger.warning(f"archive.org: no {kind} right now ({e})")
+            self.archive_wake.wait(timeout=ARCHIVE_CHECK_MINUTES * 60)
+
+    def _archive_prune(self):
+        """Deletes downloads whose holiday has gone by without them airing, so they don't hold a place for a year."""
+        season = holiday_ahead(datetime.date.today())
+        with self.lock:
+            stale = [src for src, e in self.entries.items() if e.get("archive") and src not in self.reserved
+                     and holiday_tag(src) not in (None, season)]
+            for src in stale:
+                self._remove_file(self.entries.pop(src))
+                logger.info(f"Out of season, deleted: {os.path.basename(src)}")
+        if stale:
+            self._save_manifest()
+
+    def _archive_one(self, kind):
+        """Downloads one file of a kind from archive.org into the cache. False when none could be had, or it
+        wouldn't fit. A holiday's files are only fetched in (or just ahead of) its season."""
+        got = archive.pick(kind)
+        if not got:
+            return False
+        src = os.path.join(ARCHIVE_ROOT, *got["path"].split("/"))
+        tag = holiday_tag(src)
+        if tag and tag != holiday_ahead(datetime.date.today()):
+            return True   # passed over: try another
+        with self.lock:
+            used = sum(e["size"] for e in self.entries.values() if e.get("archive"))
+        if (used + got["size"] > ARCHIVE_POOL_GB * GB
+                or shutil.disk_usage(CACHE_DIR).free - got["size"] < MIN_FREE_GB * GB):
+            return False
+        name = self._file_name(src)
+        part = os.path.join(CACHE_DIR, name + ".part")
+        try:
+            paced_copy(got["url"], part)
+        except BaseException:
+            if os.path.exists(part):
+                os.remove(part)
+            raise
+        os.replace(part, os.path.join(CACHE_DIR, name))
+        # Not part of a series: they air as they come
+        self._register(src, name, got["category"], archive=kind, item=got["item"], series=None, order=None)
         return True
 
 
@@ -1290,6 +1673,48 @@ class Show:
         self.end_target = fill - mids * self.mid_target + INTRO_SECONDS
 
 
+class MusicBlock:
+    """A run of cached music videos that airs like a show: back to back, a break after each video in
+    break_after, the next show on the grid after its closing break. Has what the lineup, cards, guide and
+    breaks read from a Show; Station.air_music plays it."""
+    category = "music"
+
+    def __init__(self, name, minutes, videos, break_after, countdown=(), lead=None):
+        self.src = f"music:{name}:{id(self)}"
+        self.srcs = [src for src, _ in videos]
+        self.videos = [(src, os.path.join(CACHE_DIR, e["file"]), e["duration"]) for src, e in videos]
+        self.name, self.episode, self.minutes = name, "", minutes
+        self.countdown, self.lead = list(countdown), lead   # the Weekly Countdown it opens with, if any
+        self.duration = sum(d for _, _, d in self.videos) + (
+            screens.COUNTDOWN_SECONDS + STATIC_SECONDS if self.countdown else 0)
+        self.break_after = set(break_after)
+        years = sorted(y for y in (music_credit(src)[2] for src in self.srcs) if y)
+        self.year = years[len(years) // 2] if years else None   # breaks lean to the videos' era
+        self.path = self.aired = self.series = self.marathon = None
+        self.breaks = []                   # nothing for the break finder to analyse
+        self.in_order = self.requested = self.marathon_intro = False
+        self.start = self.end = None
+        self.mid_target = 0.0
+        self.end_target = MIN_END_BREAK_SECONDS
+        self.sign_off_before = None
+
+    def title(self):
+        return self.name
+
+    def osd_title(self):
+        return "${media-title}"
+
+    def plan_slot(self, start):
+        self.start = start
+        mids = len(self.break_after)
+        need = self.duration + mids * MID_BREAK_SECONDS[0] + MIN_END_BREAK_SECONDS + INTRO_SECONDS
+        self.end = next_boundary(start + td(seconds=need))
+        fill = (self.end - start).total_seconds() - self.duration - INTRO_SECONDS
+        if mids:
+            self.mid_target = min(MID_BREAK_SECONDS[1], max(MID_BREAK_SECONDS[0], fill / (mids + 1.5)))
+        self.end_target = fill - mids * self.mid_target + INTRO_SECONDS
+
+
 class Lineup:
     """The next few hours of shows, chosen ahead of time so cards and the guide can say what's coming."""
     def __init__(self, cache):
@@ -1349,6 +1774,9 @@ class Lineup:
                 show = self._take(cands[0])
                 show.marathon = name
                 return show
+        block = self._music_block(start, prev)
+        if block:
+            return block
         category = roll_category(start)
         order = [category] + [c for c in MAIN_CATEGORIES if c != base_category(category)]
         if category == "kids":
@@ -1363,10 +1791,10 @@ class Lineup:
             fallback = fallback or cands
         return self._choose(fallback, start, prev) if fallback else None
 
-    @staticmethod
-    def _fixed_points(start):
+    def _fixed_points(self, start):
         """Times a show starting at `start` shouldn't run across: midnight on New Year's Eve (for the
-        countdown) and the start of a marathon block."""
+        countdown) and the start of a marathon block or a set-time music block (when enough videos are
+        cached to fill it)."""
         points = []
         if NEW_YEAR_COUNTDOWN and start.month == 12 and start.day == 31:
             points.append(datetime.datetime.combine(start.date() + td(days=1), datetime.time()))
@@ -1375,6 +1803,12 @@ class Lineup:
             for name, days, first, last in MARATHONS:
                 if day.weekday() in days:
                     points.append(datetime.datetime.combine(day, datetime.time()) + td(hours=first))
+            for name, days, first, minutes in MUSIC_BLOCKS:
+                at = datetime.datetime.combine(day, datetime.time()) + td(hours=first)
+                if day.weekday() in days and at > start:
+                    _, target = self._music_target(minutes, at + td(minutes=minutes))
+                    if sum(e["duration"] for _, e in self.cache.music_pool(at)) >= target * MUSIC_MIN_FILL:
+                        points.append(at)
         return [p for p in points if p > start]
 
     @staticmethod
@@ -1405,6 +1839,94 @@ class Lineup:
         src, e, _, in_order = cand
         self.cache.reserve(src)
         return Show(src, os.path.join(CACHE_DIR, e["file"]), e, in_order)
+
+    def _music_block(self, start, prev):
+        """A music block for `start`: one of MUSIC_BLOCKS when it's that time, otherwise now and then a
+        half-hour MUSIC_BLOCK_NAME. None when there isn't one, or not enough videos are cached for it."""
+        if not on_grid(start):
+            return None
+        day, hour = broadcast_hour(start)
+        at = start.hour + start.minute / 60
+        name, minutes = next(((n, m) for n, days, first, m in MUSIC_BLOCKS
+                              if start.weekday() in days and abs(at - first) < 0.01), (None, None))
+        if not name:
+            if isinstance(prev, MusicBlock) or "kids" in mix_at(day, hour) or random.random() >= MUSIC_CHANCE:
+                return None
+            name, minutes = MUSIC_BLOCK_NAME, SLOT_MINUTES
+            after = start + td(minutes=minutes)
+            if any(after.weekday() in days and abs(after.hour + after.minute / 60 - first) < 0.01
+                   for _, days, first, _ in MUSIC_BLOCKS):
+                return None   # a set-time block follows: no two blocks back to back
+        end = start + td(minutes=minutes)
+        if any(start < p < end for p in self._fixed_points(start)):
+            return None
+        return self._build_music(name, minutes, start, end)
+
+    @staticmethod
+    def _music_target(minutes, end):
+        """(mid breaks, seconds of video) for a music block of `minutes` ending at `end`: the slot less
+        its breaks, ~150 s per break, the closing one a little longer for the Up Next card."""
+        mids = max(1, minutes // 20 - 1)
+        target = minutes * 60 - INTRO_SECONDS - mids * 150 - 160
+        if is_lottery(end):
+            target -= events.LOTTERY_SECONDS + STATIC_SECONDS
+        return mids, target
+
+    def _build_music(self, name, minutes, start, end):
+        """Picks videos to fill the slot (fewest plays first, one video per artist where it can) and puts
+        a break about every 20 minutes at the video boundary nearest an even split."""
+        with self.lock:
+            planned = {s for show in self.shows for s in getattr(show, "srcs", ())}
+        pool = [(s, e) for s, e in self.cache.music_pool(start) if s not in planned]
+        mids, target = self._music_target(minutes, end)
+        chart = []
+        if name in COUNTDOWN_BLOCKS:
+            try:
+                chart = screens.weekly_chart()
+            except Exception:
+                logger.exception("Could not get the Weekly Countdown")
+        if chart:
+            target -= screens.COUNTDOWN_SECONDS + STATIC_SECONDS
+        random.shuffle(pool)
+        artist = {s: music_credit(s)[0] for s, _ in pool}
+        picked, total, artists = [], 0.0, set()
+        lead = None
+        ranks = {artist_key(a): rank for rank, a, _, _ in chart}
+        charted = [(ranks[artist_key(artist[s])], e["plays"], s, e) for s, e in pool
+                   if artist[s] and artist_key(artist[s]) in ranks and e["duration"] <= target]
+        if charted:   # the countdown's best placed artist with a video cached opens the block
+            rank, _, s, e = min(charted, key=lambda c: (c[0], c[1]))
+            pool.remove((s, e))
+            picked.append((s, e))
+            total += e["duration"]
+            artists.add(artist[s])
+            lead = (rank, *music_credit(s)[:2])
+        while True:
+            cands = [(s, e) for s, e in pool if e["duration"] <= target - total]
+            if not cands:
+                break
+            weights = [(0.1 if artist[s] in artists else 1.0) / (1 + 2 * e["plays"]) for s, e in cands]
+            s, e = random.choices(cands, weights=weights)[0]
+            pool.remove((s, e))
+            picked.append((s, e))
+            total += e["duration"]
+            artists.add(artist[s])
+        if total < target * MUSIC_MIN_FILL:
+            logger.info(f"Not enough music videos cached for {name} ({total / 60:.0f} of {target / 60:.0f} min)")
+            return None
+        cumulative, break_after = 0.0, []
+        bounds = []
+        for i, (_, e) in enumerate(picked[:-1]):
+            cumulative += e["duration"]
+            bounds.append((cumulative, i))
+        for k in range(1, mids + 1):
+            goal = total * k / (mids + 1)
+            free = [(abs(c - goal), i) for c, i in bounds if i not in break_after]
+            if free:
+                break_after.append(min(free)[1])
+        for s, _ in picked:
+            self.cache.reserve(s)
+        return MusicBlock(name, minutes, picked, sorted(break_after), chart, lead)
 
     def request(self, src):
         """Puts a cached show next in line (after any others asked for). Returns its planned start."""
@@ -1458,7 +1980,8 @@ class Lineup:
         with self.lock:
             if show in self.shows:
                 self.shows.remove(show)
-        self.cache.release(show.src)
+        for src in getattr(show, "srcs", [show.src]):
+            self.cache.release(src)
 
     def drop_before(self, t):
         for show in self.snapshot():
@@ -1497,6 +2020,7 @@ class Item:
         self.offset = 0.0       # where in the file the act starts
         self.overlay = None     # overlay_filter() arguments, so a glitch can be added at the last moment
         self.channel = None     # (number, name) for a make-believe channel's show
+        self.refresh = None     # remakes a card with the latest data just before it's queued (Station._refresh)
 
 
 class Player:
@@ -1631,9 +2155,10 @@ class Player:
             return False
         if not self.alive or (self.proc and self.proc.poll() is not None):
             self._restart()
+        options = {k: str(v) for k, v in item.options.items()}
         try:
             reply = self._command({"name": "loadfile", "url": item.url, "flags": "append-play", "index": -1,
-                                   "options": {k: str(v) for k, v in item.options.items()}})
+                                   "options": options})
         except (OSError, RuntimeError) as e:
             logger.error(f"Could not queue {item.label}: {e}")
             self._restart()
@@ -1756,11 +2281,11 @@ def glitch_filters(t0, kind):
     return ",".join(video), ",".join(audio)
 
 
-def overlay_filter(duration, bug, snipe=None, glitch=None, promo=None):
+def overlay_filter(duration, bug, snipe=None, glitch=None, promo=None, popups=None):
     """
     Per-file filters added after the CRT crunch (342x200): the logo bug, the progress line, the
-    NEXT / LATER / TONIGHT promo, the "NEXT" lower third and a reception glitch. Returns
-    (vf-append, af-append); either may be None.
+    NEXT / LATER / TONIGHT promo, the "NEXT" lower third, Pop-Up Video bubbles and a reception glitch.
+    Returns (vf-append, af-append); either may be None.
     """
     graph, sources, cur, n = [], [], "in", 0
 
@@ -1779,7 +2304,7 @@ def overlay_filter(duration, bug, snipe=None, glitch=None, promo=None):
         # file, so the line carries on across act breaks instead of restarting each act
         sources.append(f"color=c={PROGRESS_COLOR}:s=342x1:d=1,format=rgba[bar]")
         stage(f"overlay=x='-w+w*min(1,t/{duration:.2f})':y=H-11:eval=frame", "[bar]")
-    for script in (promo, snipe):
+    for script in (popups, promo, snipe):
         if script:
             stage(f"ass=filename={script}:fontsdir={cards.FONTS_DIR}")
     audio = None
@@ -1839,6 +2364,8 @@ class Channels:
     @staticmethod
     def fits(kind, src, e, season):
         cat, r, d = e["category"], rating(src), e["duration"]
+        if cat == "music":
+            return False   # music videos air in the main channel's music blocks
         if kind == "late":
             return r == "late"
         if r == "late" or d < 60:
@@ -1967,6 +2494,8 @@ class Station:
         self.on_air = False
         self.next_start = None      # when the next show should start (a :00/:30 boundary, or sign-on)
         self.current_show = None
+        self.anniversary = None     # today's anniversary episode once it's queued, until its card airs
+        self.anniversary_day = None
         self.skipping = False
         self.epoch = 0              # the player's skip counter when this step began
         self.detour = None          # ((number, name), src): a fake channel's show asked for from the remote
@@ -1979,11 +2508,14 @@ class Station:
         # Staggered so the specials don't all come due in the first hour
         self.special_last = {k: time.time() - every * 60 * random.uniform(0.2, 0.8) for k, every in SPECIALS.items()}
         self.last_special = 0
-        self.alerts = alerts.Monitor(WEATHER_LAT, WEATHER_LON, ALERT_TEST_HOURS) if ALERTS else None
+        self.alerts = (alerts.Monitor(WEATHER_LAT, WEATHER_LON, ALERT_TEST_HOURS)
+                       if ALERTS and WEATHER_LAT is not None else None)
         self.eas_pending = None     # an alert card to cut in with, set by the alert thread
         self.eas_resume = None      # (show, file position) to pick back up after it
         self.eas_from_detour = False
         self.eas_until = 0.0        # no second cut-in or crawl before this
+        self.scores = scores.Scoreboard(SCORES_TEAMS) if SCORES else None
+        self.scores_next = 0.0      # no score crawl before this
 
     @staticmethod
     def _glitch_time():
@@ -1995,9 +2527,16 @@ class Station:
         """Plays an item, with a burst of static before it when the picture changes. False when a skip
         from the remote dropped it (everything after a skip is dropped until the next step)."""
         quiet_after = QUIET_AFTER + (("standby",) if item.kind == "standby" else ())
+        # Worked out before the player's wait for a free slot (while the item before last is still playing),
+        # so a fetch or probe never holds up the next file
+        if item.refresh:
+            self._refresh(item)
+        self._stretch(item)
         if (STATIC_FILE and os.path.exists(STATIC_FILE) and self.prev_kind and self.prev_kind not in quiet_after
                 and item.kind not in NO_STATIC):
-            self.player.play(Item(STATIC_FILE, STATIC_SECONDS, "static", "static"), self.epoch)
+            static = Item(STATIC_FILE, STATIC_SECONDS, "static", "static")
+            self._stretch(static)
+            self.player.play(static, self.epoch)
         if self.pending_channel:
             # After a channel change: the channel number in the corner, like a set's on-screen display
             item.options["osd-playing-msg"] = osd_msg(channel_osd(*self.pending_channel, item.show))
@@ -2008,6 +2547,33 @@ class Station:
         if ok:
             self.prev_kind = item.kind
         return ok
+
+    def _refresh(self, item):
+        """Remakes a card (the weather) with the latest data just before it's queued, since it was made when
+        the break was planned, minutes earlier. Keeps the planned one if that fails or comes out a different
+        length (the break around it was timed for it)."""
+        try:
+            card = item.refresh()
+        except Exception:
+            logger.exception(f"Could not refresh {item.label}")
+            return
+        if card and abs(card.duration - item.duration) < 0.05:
+            item.url = card.url
+        else:
+            logger.info(f"Keeping the {item.kind} screen made when the break was planned")
+
+    def _stretch(self, item):
+        """A picture narrower than the screen fills it (see STRETCH). Cached files use the aspect saved when
+        they were copied; anything else (the bumper, static) is probed once."""
+        if not STRETCH or "://" in item.url or "vf-pre" in item.options:
+            return
+        if os.path.dirname(item.url) == CACHE_DIR:
+            dar = self.cache.aspect(item.url)
+        else:
+            dar = display_aspect(item.url)
+        pre = stretch_filter(dar)
+        if pre:
+            item.options["vf-pre"] = pre
 
     def _maybe_glitch(self, item):
         """Puts the hourly-ish reception glitch into this item if it comes due while it plays."""
@@ -2066,14 +2632,32 @@ class Station:
         if off_air(start):
             self.sign_off(t)
             return
+        self._queue_anniversary(start)
         show = self.lineup.next_show(start)
         if not show:
             logger.warning("Nothing cached to play, standing by.")
-            self.emit(self.card(cards.stand_by(), "standby"))
+            self.emit(self.card(cards.stand_by(holiday_look(start.date())), "standby"))
             return
         self.on_air = True
         ON_AIR.set()
         self.air(show)
+
+    def _queue_anniversary(self, start):
+        """From ANNIVERSARY_HOUR, once a day, puts the day's anniversary episode next in line (copying it from
+        the NAS first if the refill didn't); air() opens it with the From the Vault card."""
+        day = broadcast_date(start)
+        hour = broadcast_hour(start)[1]
+        if self.anniversary_day == day:
+            return
+        info = screens.anniversaries(day).get(day)
+        if not info:
+            return
+        self.cache.reserve(info["src"])   # held for its slot (after a restart too), never picked before it
+        if hour < ANNIVERSARY_HOUR or not allowed(info["src"], hour):
+            return
+        self.anniversary_day, self.anniversary = day, info
+        logger.info(f"Anniversary: {os.path.basename(info['src'])}, {info['years']} years ago tonight. "
+                    + self.remote_play_next(info["src"]))
 
     def sign_off(self, t):
         signon = sign_on_after(t)
@@ -2083,7 +2667,7 @@ class Station:
             anthem = events.anthem() if ANTHEM else None
             if anthem:
                 self.emit(self.card(anthem, "anthem"))
-            self.emit(self.card(cards.sign_off(signon)))
+            self.emit(self.card(cards.sign_off(signon, holiday_look(t.date()))))
             t = self.eta()
             until = signon - td(seconds=lead)
             if OFF_AIR_LOOP_MINUTES is not None:
@@ -2111,7 +2695,7 @@ class Station:
     def lottery_card(self, when):
         self.lottery_day = broadcast_date(when)
         logger.info("Tonight's lottery drawing is on.")
-        return self.card(events.lottery(when), "lottery")
+        return self.card(events.lottery(when, holiday_look(when.date())), "lottery")
 
     # --- Breaks ---
 
@@ -2132,9 +2716,12 @@ class Station:
         random.shuffle(pool)
 
         pool = [(s, e) for s, e in pool if holiday_tag(s) in (None, season)]  # no Santa ads in July
+        # archive.org's ads get about ARCHIVE_SHARE of the picks between them
+        ours = sum(1 for _, e in pool if e.get("archive"))
+        boost = ARCHIVE_SHARE / (1 - ARCHIVE_SHARE) * (len(pool) - ours) / ours if 0 < ours < len(pool) else 1.0
 
         def weight(src, e):
-            w = 1.0 / (1 + e["plays"])
+            w = (boost if e.get("archive") else 1.0) / (1 + e["plays"])
             if e["duration"] > 75:
                 w *= 0.5  # trailers and long promos now and then, mostly ordinary spots
             y = commercial_year(src)
@@ -2179,8 +2766,9 @@ class Station:
 
     def mid_break(self, show):
         when = self.eta()
-        right_back = self.card(cards.right_back())
-        back = self.card(cards.back_to(show.name))
+        season = holiday_look(when.date())
+        right_back = self.card(cards.right_back(season or heritage_month(when.date())))
+        back = self.card(cards.back_to(show.name, season))
         budget = show.mid_target - right_back.duration - back.duration - 2 * STATIC_SECONDS
         extra = []
         if self.remaining_lottery(when):
@@ -2250,7 +2838,8 @@ class Station:
             d = (target - self.eta()).total_seconds() - STATIC_SECONDS
             d = min(UP_NEXT_SECONDS[1], max(UP_NEXT_SECONDS[0], d))
             card = cards.up_next((nxt.name, nxt.episode), (later.name, later.episode) if later else None,
-                                 round_time(later.start) if later else None, duration=d)
+                                 round_time(later.start) if later else None, duration=d,
+                                 season=holiday_look(target.date()))
             if not self.emit(self.card(card)):
                 return
         if new_year:
@@ -2273,27 +2862,52 @@ class Station:
                 card = None
             if card:
                 self.special_last[kind] = self.last_special = now
-                return self.card(card)
+                item = self.card(card)
+                if kind in FRESH_SPECIALS:
+                    item.refresh = lambda kind=kind: self.build_special(kind, self.eta(), first_start, fresh=True)
+                return item
             self.special_last[kind] = now - SPECIALS[kind] * 60 + 900  # no data right now, try again in 15 min
         return None
 
-    def build_special(self, kind, airs_at, first_start):
+    def build_special(self, kind, airs_at, first_start, fresh=False):
+        """A special screen for airs_at, or None without data. fresh: made just before it's queued, so the
+        data is fetched again unless it's very recent, with less time to wait for it (see _refresh)."""
+        season, month = holiday_look(airs_at.date()), heritage_month(airs_at.date())
         if kind == "guide":
-            return cards.guide(self.guide_rows(first_start), airs_at)
+            return cards.guide(self.guide_rows(first_start), airs_at, season)
         if kind == "weather":
-            data = cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ)
-            return cards.weather(data, WEATHER_PLACE, airs_at) if data else None
+            if WEATHER_LAT is None:
+                return None
+            data = (cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ, max_age_minutes=2, timeout=4) if fresh
+                    else cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ))
+            return cards.weather(data, WEATHER_PLACE, airs_at, season) if data else None
         if kind == "quiz":
-            return screens.pop_quiz()
+            return screens.pop_quiz(season, month)
         if kind == "history":
-            return screens.today_in_history(airs_at)
+            return screens.today_in_history(airs_at, season, month)
         if kind == "launch":
-            return screens.launch_watch(airs_at)
+            return screens.launch_watch(airs_at, season)
         if kind == "space":
-            return screens.whos_in_space(airs_at)
+            return screens.whos_in_space(airs_at, season)
+        if kind == "markets":
+            return screens.markets(airs_at, season)
+        if kind == "sky":
+            return screens.tonight_sky(airs_at, season)
+        if kind == "art":
+            return screens.art_break(airs_at, season)
+        if kind == "teletext":
+            data = (cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ) if WEATHER_LAT is not None
+                    else None)
+            # The show on now and the lineup as planned: unlike guide_rows, this works in a mid-show break too
+            listings = [(round_time(s.start), s.name, s.episode)
+                        for s in [self.current_show] + self.lineup.snapshot() if s and s.start]
+            return screens.teletext(airs_at, data, WEATHER_PLACE, listings, blurbs.headlines(), season)
         if kind == "reminder":
             upcoming = next_reminder(airs_at.date())
-            return events.reminder(*upcoming, airs_at) if upcoming else None
+            return events.reminder(*upcoming, airs_at, season) if upcoming else None
+        if kind == "blurb":
+            show = self.current_show   # the show this break is in, which the bump may riff on
+            return blurbs.blurb(blurb_level(airs_at), show.name if isinstance(show, Show) else None)
         return None
 
     def guide_rows(self, first_start):
@@ -2311,22 +2925,21 @@ class Station:
     def air(self, show, join=None):
         """Airs a show in acts with breaks. join=(act, position) picks it up partway through (back from
         another channel), without the intro."""
+        if isinstance(show, MusicBlock):
+            return self.air_music(show, join)
         self.current_show = show
         t = show.start
-        hour = (t.date(), t.hour)
-        if join:
-            pass
-        elif self.good_morning or (t.minute == 0 if on_grid(t) else hour != self.last_id_hour):
-            self.emit(self.card(events.station_id(t, self.good_morning, holiday_look(t.date()))))
-            self.last_id_hour = hour
-            self.good_morning = False
-        elif BUMPER_FILE and os.path.exists(BUMPER_FILE):
-            self.emit(Item(BUMPER_FILE, 4.5, "bumper", "bumper"))
+        if not join:
+            self._open(t)
         if show.marathon_intro and not join:
             key = marathon_series(broadcast_date(t), self.cache.indexer)
-            season = holiday_season(t.date())
+            season = holiday_look(t.date())
             self.emit(self.card(events.marathon(show.marathon, show.name, t, season)))
             logger.info(f"{show.marathon}: {show.name} ({key})")
+        if self.anniversary and show.src == self.anniversary["src"] and not join:
+            self.emit(self.card(screens.anniversary(self.anniversary, show.name, show.episode, t,
+                                                    holiday_look(t.date()))))
+            self.anniversary = None
 
         breaks = show.breaks if show.breaks is not None else show.even_breaks()
         bounds = [0.0] + breaks + [show.duration]
@@ -2365,6 +2978,22 @@ class Station:
                 self.mid_break(show)
             if self.player.epoch != self.epoch:
                 break
+        self._close(show)
+
+    def _open(self, t):
+        """What comes before a show starting at t: the station ID at the top of the hour (or the first
+        show of the day, or off the grid once an hour), otherwise the bumper."""
+        hour = (t.date(), t.hour)
+        if self.good_morning or (t.minute == 0 if on_grid(t) else hour != self.last_id_hour):
+            self.emit(self.card(events.station_id(t, self.good_morning, holiday_look(t.date()),
+                                                  heritage_month(t.date()))))
+            self.last_id_hour = hour
+            self.good_morning = False
+        elif BUMPER_FILE and os.path.exists(BUMPER_FILE):
+            self.emit(Item(BUMPER_FILE, 4.5, "bumper", "bumper"))
+
+    def _close(self, show):
+        """After a show (or music block) has aired, or the remote cut into it."""
         if self.player.epoch != self.epoch:  # the remote cut in
             if self.detour or self.rejoining or self.eas_pending:
                 # Changed channels (or an alert cut in): the show carries on "airing" without us, to rejoin later
@@ -2376,6 +3005,59 @@ class Station:
             self.next_start = None
         self.current_show = None
         logger.info(f"--- {self.cache.stats_line()} ---")
+
+    def air_music(self, block, join=None):
+        """Airs a music block: the videos back to back with a break after each in block.break_after, each
+        video's artist and song in a lower third. join=(video, position) picks it up partway through."""
+        self.current_show = block
+        if not join:
+            self._open(block.start)
+            if block.countdown:
+                self.emit(self.card(screens.countdown(block.countdown, block.lead, block.start,
+                                                      holiday_look(block.start.date()))))
+        first, position = join or (0, 0.0)
+        last = len(block.videos) - 1
+        facts = popup_facts() if POPUP_VIDEO else {}
+        logger.info(f"{'Joining' if join else 'Airing'} {block.name} ({len(block.videos)} videos, "
+                    f"{block.duration / 60:.0f} min, {cards.clock(block.start)}-{cards.clock(block.end)}, "
+                    f"era {block.year or '?'})")
+        for i in range(first, len(block.videos)):
+            src, path, duration = block.videos[i]
+            artist, song, year = music_credit(src)
+            begin = position if (join and i == first) else 0.0
+            options = {"force-media-title": f"{artist} - {song}" if artist else song}
+            if begin:
+                options["start"] = begin
+            overlay = dict(duration=duration, bug=True)
+            if duration - begin > MUSIC_TITLE_AT + 2 * MUSIC_TITLE_SECONDS + 5:
+                panels = ([("Now", artist)] if artist else []) + [(str(year) if year else "Video", song)]
+                overlay["promo"] = events.promo(panels, begin + MUSIC_TITLE_AT, MUSIC_TITLE_SECONDS)
+            if i == last and SNIPE_SECONDS and duration - begin > SNIPE_SECONDS + 15:
+                overlay["snipe"] = self.snipe(block, duration)
+            popped = facts.get(meta.popup_key(artist, song)) if artist else None
+            if popped:
+                overlay["popups"] = events.popups(popped["facts"], duration, begin)
+            vf, _ = overlay_filter(**overlay)
+            if vf:
+                options["vf-append"] = vf
+
+            def on_end(reason, src=src, closing=i == last):
+                self.cache.mark_played(src)
+                if closing:
+                    self.show_done(block)
+            label = f"{block.name}: {artist} - {song}" if artist else f"{block.name}: {song}"
+            item = Item(path, duration - begin, "act", label, options, on_end)
+            item.show, item.offset, item.overlay, item.video = block, begin, overlay, i
+            logger.info(f"  {i + 1}/{len(block.videos)} {artist or '?'} - {song}" + (f" ({year})" if year else ""))
+            if not self.emit(item):
+                break
+            if i == last:
+                self.end_break(block)
+            elif i in block.break_after:
+                self.mid_break(block)
+            if self.player.epoch != self.epoch:
+                break
+        self._close(block)
 
     # --- Other channels ---
 
@@ -2465,8 +3147,22 @@ class Station:
     @staticmethod
     def join_point(show, t):
         """(act, position in the file) where a show is at clock time t by its slot plan, or None when it's
-        in its closing break."""
+        in its closing break. For a music block: (video, position in that video)."""
         elapsed = (t - show.start).total_seconds()
+        if isinstance(show, MusicBlock):
+            clock_at = 0.0
+            for i, (_, _, d) in enumerate(show.videos):
+                if elapsed < clock_at + d:
+                    position = max(0.0, elapsed - clock_at)
+                    if d - position > 30:
+                        return i, position
+                    return (i + 1, 0.0) if i < len(show.videos) - 1 else None
+                clock_at += d
+                if i in show.break_after:
+                    clock_at += show.mid_target
+                    if elapsed < clock_at:
+                        return i + 1, 0.0  # mid-break: back in for the next video
+            return None
         breaks = show.breaks if show.breaks is not None else show.even_breaks()
         bounds = [0.0] + breaks + [show.duration]
         clock_at = 0.0
@@ -2486,19 +3182,26 @@ class Station:
         return None
 
     def show_done(self, show):
-        """Counts a show as played (once), moving its series along if it aired in order."""
+        """Counts a show as played (once), moving its series along if it aired in order. A music block's
+        videos count as they play; whatever it didn't get to is let go for the next block."""
         if not getattr(show, "done", False):
             show.done = True
-            self.cache.mark_played(show.src, show.in_order)
+            if isinstance(show, MusicBlock):
+                for src in show.srcs:
+                    self.cache.release(src)
+            else:
+                self.cache.mark_played(show.src, show.in_order)
 
-    def snipe(self, show):
-        """The lower third for the end of a show, naming the next one."""
+    def snipe(self, show, length=None):
+        """The lower third for the end of a show, naming the next one. length: the file it rides on, when
+        that isn't the whole show (a music block's last video)."""
         upcoming = self.lineup.upcoming(show.end)
         if not upcoming or upcoming[0].sign_off_before:
             return None
         nxt = upcoming[0]
         name = "More " + nxt.name if nxt.marathon and nxt.name == show.name else nxt.name
-        return events.snipe(name, show.duration - SNIPE_SECONDS, show.duration - 2)
+        end = length or show.duration
+        return events.snipe(name, end - SNIPE_SECONDS, end - 2)
 
     def promo(self, show, at):
         """The lower third early in a show: NEXT, then LATER (the next different show) and TONIGHT
@@ -2569,8 +3272,10 @@ class Station:
         self.eas_resume = None
         self.eas_from_detour = bool(item and item.kind == "detour")
         if item and item.kind == "act" and item.show is self.current_show and item.started:
-            position = item.offset + time.time() - item.started
-            self.eas_resume = (item.show, max(item.offset, position - 3.0))
+            position = max(item.offset, item.offset + time.time() - item.started - 3.0)
+            if isinstance(item.show, MusicBlock):
+                position = (item.video, position)
+            self.eas_resume = (item.show, position)
         logger.info(f"Alert cutting in ({card.kind}, {card.duration:.0f}s)")
         self.eas_until = time.time() + card.duration + 10
         self.eas_pending = card
@@ -2589,7 +3294,7 @@ class Station:
         if resume and resume[0] is self.interrupted:
             self.interrupted = None
             show, position = resume
-            self.emit(self.card(cards.back_to(show.name)))
+            self.emit(self.card(cards.back_to(show.name, holiday_look(datetime.date.today()))))
             point = self.act_at(show, position)
             if point:
                 self.air(show, join=point)
@@ -2602,7 +3307,13 @@ class Station:
 
     @staticmethod
     def act_at(show, position):
-        """(act, position) to pick a show back up at a file position, or None when it's all but over."""
+        """(act, position) to pick a show back up at a file position, or None when it's all but over.
+        For a music block, position is (video, position in that video)."""
+        if isinstance(show, MusicBlock):
+            video, position = position
+            if show.videos[video][2] - position > 15:
+                return video, position
+            return (video + 1, 0.0) if video < len(show.videos) - 1 else None
         breaks = show.breaks if show.breaks is not None else show.even_breaks()
         bounds = [0.0] + breaks + [show.duration]
         for i in range(len(bounds) - 1):
@@ -2642,6 +3353,57 @@ class Station:
         item.on_end = lambda reason: self.alerts.test_aired() if reason == "eof" else None
         return item
 
+    # --- Live scores ---
+
+    def watch_scores(self):
+        """Background thread: crawls the live scores across a show every SCORES_MINUTES while games are on."""
+        while True:
+            try:
+                self.check_scores()
+            except Exception:
+                logger.exception("Score check failed")
+            time.sleep(SCORES_CHECK_SECONDS)
+
+    def check_scores(self):
+        # Fetches only once a show is on that the crawl could go over
+        if not self.on_air or self.eas_pending or time.time() < self.scores_next or not self._score_window():
+            return
+        games = self.scores.live()
+        if not games:
+            self.scores_next = time.time() + SCORES_IDLE_MINUTES * 60
+        elif self.air_scores(games):
+            self.scores_next = time.time() + SCORES_MINUTES * 60
+
+    def _score_window(self):
+        """(item, earliest, latest): the file times a score crawl can run between over what's playing, or
+        None. Shows only (not breaks or music videos), clear of the promo early in a show and the NEXT
+        lower third at its end."""
+        item = self.player.current()
+        if not item or item.kind not in ("act", "detour") or not item.started or isinstance(item.show, MusicBlock):
+            return None
+        overlay = item.overlay or {}
+        earliest = item.offset + (PROMO_AT + 3 * PROMO_PANEL_SECONDS if overlay.get("promo") else 0) + 5
+        latest = item.offset + item.duration - 2
+        if overlay.get("snipe"):
+            latest = min(latest, item.show.duration - SNIPE_SECONDS - 2)
+        return item, earliest, latest
+
+    def air_scores(self, games):
+        """Lays the score crawl over the show that's playing, if it fits in the window."""
+        window = self._score_window()
+        position = self.player.position()
+        if not window or position is None:
+            return False
+        item, earliest, latest = window
+        start = position + 0.8
+        shown, d = scores.fit(games, SCORES_MAX_SECONDS)
+        if start < earliest or start + d > latest:
+            return False
+        script = scores.ticker_script(shown, start)
+        self.player.add_filter("vf", f"@scores:lavfi=[ass=filename={script}:fontsdir={cards.FONTS_DIR}]")
+        logger.info(f"Scores ({d:.0f}s, {len(shown)} of {len(games)} live games) over {item.label}")
+        return True
+
     # --- Remote ---
 
     def remote_alert_test(self, kind):
@@ -2675,7 +3437,7 @@ class Station:
                            "duration": round(item.duration)}
             show = item.show or self.current_show
             if show:
-                position = item.offset + elapsed if item.show else None
+                position = item.offset + elapsed if item.show and not isinstance(show, MusicBlock) else None
                 now_playing["show"] = {
                     "id": show.src, "name": show.name, "episode": show.episode, "category": show.category,
                     "aired": meta.long_date(show.aired) if show.aired else None,
@@ -2770,6 +3532,8 @@ def main():
     remote.start(station, REMOTE_PORT)
     if station.alerts:
         threading.Thread(target=station.watch_alerts, daemon=True).start()
+    if station.scores:
+        threading.Thread(target=station.watch_scores, daemon=True).start()
     station.run()
 
 if __name__ == "__main__":

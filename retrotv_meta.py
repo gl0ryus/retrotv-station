@@ -176,3 +176,50 @@ def holiday(src):
             if d.month == month and first <= d.day <= last:
                 return name
     return None
+
+
+
+# --- Music videos ---
+
+MUSIC_TAGS = re.compile(r"\s*[\(\[][^\)\]]*(official|video|audio|lyric|\bhd\b|\bhq\b|remaster|explicit|clean|version|"
+                        r"\bedit\b|\d{3,4}p)[^\)\]]*[\)\]]", re.I)
+
+
+def music_credit(src):
+    """(artist, song, year) from a music video's file name, "2004 - Artist - Song [id].mp4" or
+    "Artist - Song (Official Video).mp4". artist is None when the name doesn't split."""
+    stem = os.path.splitext(os.path.basename(src))[0]
+    stem = re.sub(r"\s*\[[\w-]{11}\]$", "", stem)        # the YouTube id
+    stem = re.sub(r"-(?:\d{1,3}|\d{3,4}p)$", "", stem)    # "-48", "-360p" left by older downloads
+    m = re.search(r"-([\w-]{11})$", stem)                # "-8C5NLfYdZaE": an id glued on with a dash
+    if m and (re.search(r"\d", m.group(1)) or re.search(r"[A-Z].*[a-z]|[a-z].*[A-Z]", m.group(1))) and " " not in m.group(1):
+        stem = stem[:m.start()]
+    m = re.match(r"^((?:19|20)\d\d) - (.+)$", stem)
+    year, stem = (int(m.group(1)), m.group(2)) if m else (None, stem)
+    stem = MUSIC_TAGS.sub("", stem)
+    stem = re.sub(r"\s+[\(\[]?(?:official|lyric)\b.*$", "", stem, flags=re.I)  # "Song Official Music Video [2004]"
+    stem = re.sub(r"\s+(?:music\s+)?video$|\s+h[dq]$", "", stem, flags=re.I).strip(" -_")
+    m = re.search(r"\s*\(((?:19|20)\d\d)\)$", stem)                       # "Blue (Da Ba Dee) (1999)"
+    if m:
+        year, stem = year or int(m.group(1)), stem[:m.start()]
+    for sep in (" - ", " – ", " _ ", "- ", "   "):
+        artist, found, song = stem.partition(sep)
+        if found and artist.strip() and song.strip():
+            return artist.strip(), song.strip().strip("'\""), year
+    m = re.match(r"^(.+?)\s+['\"‘“](.+?)['\"’”]$", stem)                   # Artist 'Song'
+    if m:
+        return m.group(1).strip(), m.group(2).strip(), year
+    m = re.match(r"^(.+?) by (.+)$", stem)                                   # Song by Artist
+    if m:
+        return m.group(2).strip(), m.group(1).strip(), year
+    return None, stem.strip(), year
+
+
+def artist_key(name):
+    """An artist's name for matching across sources: "The Starting Line" and "starting line" are one."""
+    return re.sub(r"[^a-z0-9]", "", re.sub(r"^the\s+", "", (name or "").lower().replace("&", "and")))
+
+
+def popup_key(artist, song):
+    """What a music video's Pop-Up Video facts are filed under (retrotv_news.py writes them)."""
+    return f"{artist_key(artist)}|{re.sub(r'[^a-z0-9]', '', (song or '').lower())}"

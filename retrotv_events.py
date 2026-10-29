@@ -7,13 +7,17 @@ import datetime
 import math
 import os
 import random
-import re
 import subprocess
 
 import retrotv_cards as cards
 from retrotv_cards import (
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, MUSTARD, SHADOW_RED, SKY, W, H, WHITE, YELLOW,
-    ASSETS_DIR, FONTS_DIR, RENDER, Card, Script, circle, clip_text, clock, fit, music, rect, stripes,
+    ASSETS_DIR, CHANNEL, FONTS_DIR, NETWORK, RENDER, Card, Script, circle, clip_text, clock, esc, fit, info_header, look,
+    music, rect, stripes,
+    BLUSH, BROWN, CLOVER, DEEP_NAVY, GLORY_BLUE, GLORY_RED, GOLD, KELLY, LIGHT_BLUE, LILAC_SHADOW, MAPLE, MARDI_GREEN,
+    MOON, MOSS, ORANGE, PAPEL_COLORS, PASTELS, PINK, PUMPKIN, PURPLE, ROSE, RUST, SLATE, SLIME, WINE, XMAS_GREEN,
+    XMAS_RED,
+    HEART, LEAF, SHAMROCK, drift, fly_bats,
 )
 
 CREEPSTER = "Creepster"
@@ -36,29 +40,7 @@ NEW_YEAR_SECONDS = 80.0
 NEW_YEAR_MIDNIGHT = 60.0   # where midnight falls in the countdown
 MARATHON_SECONDS = 6.0
 ID_SECONDS = 4.5
-
-ORANGE = "&H001A7AFF&"
-PURPLE = "&H008C1A5B&"
-SLIME = "&H005DE19B&"
-MOON = "&H00B8EEF8&"
-XMAS_RED = "&H002828D6&"
-XMAS_GREEN = "&H00406E1E&"
-GOLD = "&H0037AFD4&"
-PINK = "&H00B469FF&"
-ROSE = "&H004B1FD6&"
-BLUSH = "&H00DCC8FF&"
-WINE = "&H00401050&"
-KELLY = "&H0040A01E&"
-CLOVER = "&H0050C83C&"
-MOSS = "&H00205A10&"
-PASTELS = ("&H00D9B3FF&", "&H00FFB3C9&", "&H00C8F0B3&", "&H00A0F0FF&", "&H00FFD8A8&")  # pink, lilac, mint, butter, sky
-LILAC_SHADOW = "&H00B04F7A&"
-GLORY_RED = "&H003422B2&"
-GLORY_BLUE = "&H006E3B3C&"
-PUMPKIN = "&H003A9CF5&"
-MAPLE = "&H002B39C0&"
-RUST = "&H001E43A6&"
-BROWN = "&H0018345A&"
+GREETING = "FROM ALL OF US AT GL0RYUS"   # the holiday IDs' sign-off line (the network's name, shortened to fit)
 
 STEREO = "aformat=sample_rates=48000:channel_layouts=stereo"
 
@@ -89,76 +71,20 @@ def _url(video, audio):
 
 # --- Station IDs ---
 
-BAT = ("m 28 10 l 33 4 l 36 9 l 44 2 l 56 6 l 52 10 l 46 12 l 40 20 l 34 15 l 28 22 "
-       "l 22 15 l 16 20 l 10 12 l 4 10 l 0 6 l 12 2 l 20 9 l 23 4")
-
-
-def station_id(now, good_morning=False, season=None):
+def station_id(now, good_morning=False, season=None, month=None):
     """The hourly ID: the bumper with the time over it, dressed up for a holiday (see LOOKS) when its
-    sting, music/id_<season>.ogg, is there."""
+    sting, music/id_<season>.ogg, is there, or now and then naming a heritage month."""
     sting = music(f"id_{season}.ogg") if season else None
-    look = LOOKS.get(season)
-    if not look or not sting or not os.path.exists(sting):
-        return cards.station_id(now, good_morning)
+    dress = LOOKS.get(season)
+    if not dress or not sting or not os.path.exists(sting):
+        return cards.station_id(now, good_morning, month)
     d = ID_SECONDS
     s = Script()
-    grade = look(s, d, now, good_morning)
+    grade = dress(s, d, now, good_morning)
     path = s.write(f"id-{season}")
     video = (f"movie=filename={cards.ID_BACKGROUND},scale={RENDER.replace('x', ':')},setsar=1,{grade},"
              f"ass=filename={path}:fontsdir={FONTS_DIR},format=yuv420p")
     return Card(_url(video, _audio(sting, d, fade=0.2)), d, "id")
-
-
-def _shape_xform(path, fn):
-    """Applies fn(x, y) -> (x, y) to every point of a drawing path."""
-    tokens = iter(re.findall(r"-?\d+(?:\.\d+)?|[a-z]", path))
-    out = []
-    for tok in tokens:
-        if tok.isalpha():
-            out.append(tok)
-        else:
-            x, y = fn(float(tok), float(next(tokens)))
-            out.append(f"{x:.1f} {y:.1f}")
-    return " ".join(out)
-
-
-HEART = ("m 25 45 b 10 33 0 23 0 13 b 0 5 6 0 13 0 b 19 0 23 4 25 9 b 27 4 31 0 37 0 "
-         "b 44 0 50 5 50 13 b 50 23 40 33 25 45")
-LEAF = ("m 20 0 l 24 9 l 31 6 l 29 15 l 39 14 l 33 21 l 38 27 l 27 27 l 23 37 l 21 34 l 21 42 l 19 42 "
-        "l 19 34 l 17 37 l 13 27 l 2 27 l 7 21 l 1 14 l 11 15 l 9 6 l 16 9")
-
-
-def _shamrock():
-    """Three small hearts around a centre at 30,30 with their points in, and a curved stem."""
-    parts = []
-    for angle in (0, 120, 240):
-        a = math.radians(angle)
-
-        def leaf(x, y, a=a):
-            x, y = x * 0.5 - 12.5 + 30, y * 0.5 - 22.5 + 30  # half size, point on the centre
-            dx, dy = x - 30, y - 30
-            return 30 + dx * math.cos(a) - dy * math.sin(a), 30 + dx * math.sin(a) + dy * math.cos(a)
-        parts.append(_shape_xform(HEART, leaf))
-    parts.append("m 29 30 b 31 40 35 48 42 54 l 39 56 b 32 49 28 41 27 30")
-    return " ".join(parts)
-
-
-SHAMROCK = _shamrock()
-
-
-def _drift(s, d, rnd, path, colors, count, scale=(60, 130), fall=(200, 380), sway=60, spin=40, rise=False,
-           alpha="&H00&", layer=6):
-    """Props drifting down the screen (or up, with rise) like the Christmas snow, each tumbling a little."""
-    for _ in range(count):
-        x = rnd.randrange(0, W)
-        y = rnd.randrange(0, H + 100) if rise else rnd.randrange(-H // 2, H - 100)
-        dy = rnd.randint(*fall) * (-1 if rise else 1)
-        size = rnd.randint(*scale)
-        turn = rnd.randint(-spin, spin)
-        a0 = rnd.randint(-30, 30)
-        s.shape(0, d, 0, 0, path, rnd.choice(colors), fade=(200, 250), layer=layer, align=5,
-                extra=f"\\move({x},{y},{x + rnd.randint(-sway, sway)},{y + dy})\\fscx{size}\\fscy{size}"
-                      f"\\frz{a0}\\t(\\frz{a0 + turn})\\1a{alpha}")
 
 
 def _halloween_look(s, d, now, good_morning):
@@ -168,19 +94,12 @@ def _halloween_look(s, d, now, good_morning):
     for a, b in ((0.0, 0.12), (2.22, 2.42), (2.56, 2.68)):
         s.shape(a, b, 0, 0, rect(W, H), WHITE, fade=(0, 120), layer=9, extra="\\1a&H60&")
     s.shape(0, d, 842, 52, circle(62), MOON, fade=(500, 250), layer=1, extra="\\blur6")
-    rnd = random.Random(now.hour)
-    for i in range(4):
-        y0 = rnd.randint(330, 520)
-        start = 0.2 + i * 0.55
-        flap = "".join(f"\\t({t},{t + 90},\\fscy35)\\t({t + 90},{t + 180},\\fscy100)" for t in range(0, 4000, 180))
-        scale = rnd.choice((90, 120, 150))
-        s.shape(start, d, 0, 0, BAT, BLACK, fade=(100, 200), layer=6, align=5,
-                extra=f"\\move(-60,{y0},{1100},{y0 - rnd.randint(260, 420)})\\fscx{scale}\\fscy{scale}{flap}")
+    fly_bats(s, 0, d, random.Random(now.hour), 4)
     top = "GOOD MORNING, BOILS & GHOULS" if good_morning else "HAPPY HALLOWEEN"
     # Up top, clear of the bumper's logo
     s.text(0.6, d, 512, 98, top, CREEPSTER, 58 if good_morning else 84, ORANGE, shadow=5,
            shadow_color=PURPLE, fade=fade, layer=7)
-    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"GL0RYUS NETWORK · {clock(now)}"
+    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"{NETWORK} · {clock(now)}"
     s.text(1.6, d - 0.1, 512, 505, bottom, BARLOW_X, 50, SLIME, spacing=4, shadow=3, shadow_color=BLACK,
            fade=fade, layer=7)
     return grade
@@ -199,7 +118,7 @@ def _christmas_look(s, d, now, good_morning):
     top = "GOOD MORNING!" if good_morning else "HAPPY HOLIDAYS"
     s.text(0.6, d, 512, 96, top, XMAS, 84, XMAS_RED, outline=4, shadow=4, shadow_color=WHITE,
            fade=fade, layer=7, extra=f"\\3c{WHITE}\\4c{XMAS_GREEN}\\b1")
-    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"FROM ALL OF US AT GL0RYUS · {clock(now)}"
+    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"{GREETING} · {clock(now)}"
     s.text(1.6, d - 0.1, 512, 505, bottom, BARLOW_X, 46, WHITE, spacing=4, shadow=3, shadow_color=XMAS_GREEN,
            fade=fade, layer=7)
     return grade
@@ -208,7 +127,7 @@ def _christmas_look(s, d, now, good_morning):
 def _valentines_look(s, d, now, good_morning):
     fade = (300, 250)
     rnd = random.Random(now.hour)
-    _drift(s, d, rnd, HEART, (PINK, ROSE, BLUSH), 16, scale=(50, 120), fall=(280, 520), sway=50, spin=20,
+    drift(s, 0, d, rnd, HEART, (PINK, ROSE, BLUSH), 16, scale=(50, 120), fall=(280, 520), sway=50, spin=20,
            rise=True, alpha="&H30&")
     if good_morning:
         top = "Good Morning, Sweetheart"
@@ -216,7 +135,7 @@ def _valentines_look(s, d, now, good_morning):
         top = "Happy Valentine's Day" if (now.month, now.day) == (2, 14) else "Be My Valentine"
     s.text(0.6, d, 512, 96, top, LOBSTER, 80, WHITE, outline=3, shadow=4, shadow_color=WINE, fade=fade, layer=7,
            extra=f"\\3c{ROSE}")
-    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"GL0RYUS NETWORK · {clock(now)}"
+    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"{NETWORK} · {clock(now)}"
     s.text(1.6, d - 0.1, 512, 505, bottom, BARLOW_X, 50, BLUSH, spacing=4, shadow=3, shadow_color=WINE,
            fade=fade, layer=7)
     return "eq=brightness=-0.04:saturation=1.15,colorbalance=rs=0.10:bs=0.04"
@@ -225,11 +144,11 @@ def _valentines_look(s, d, now, good_morning):
 def _stpatricks_look(s, d, now, good_morning):
     fade = (300, 250)
     rnd = random.Random(now.hour)
-    _drift(s, d, rnd, SHAMROCK, (KELLY, CLOVER, KELLY), 14, scale=(60, 140))
+    drift(s, 0, d, rnd, SHAMROCK, (KELLY, CLOVER, KELLY), 14, scale=(60, 140))
     top = "Top o' the Morning!" if good_morning else "Happy St. Patrick's Day"
     s.text(0.6, d, 512, 98, top, GROVER, 74, CLOVER, outline=2, shadow=5, shadow_color=MOSS, fade=fade, layer=7,
            extra=f"\\3c{GOLD}")
-    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"GL0RYUS NETWORK · {clock(now)}"
+    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"{NETWORK} · {clock(now)}"
     s.text(1.6, d - 0.1, 512, 505, bottom, BARLOW_X, 50, GOLD, spacing=4, shadow=3, shadow_color=BLACK,
            fade=fade, layer=7)
     return "eq=brightness=-0.04:saturation=1.1,colorbalance=gs=0.08:rs=-0.03"
@@ -252,7 +171,7 @@ def _easter_look(s, d, now, good_morning):
     top = "Good Morning!" if good_morning else "Happy Easter"
     s.text(0.6, d, 512, 96, top, CHEWY, 88, PASTELS[0], outline=4, shadow=4, shadow_color=LILAC_SHADOW, fade=fade,
            layer=7, extra=f"\\3c{WHITE}")
-    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"FROM ALL OF US AT GL0RYUS · {clock(now)}"
+    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"{GREETING} · {clock(now)}"
     s.text(1.6, d - 0.1, 512, 505, bottom, BARLOW_X, 46, WHITE, spacing=4, shadow=3, shadow_color=LILAC_SHADOW,
            fade=fade, layer=7)
     return "eq=brightness=0.02:saturation=0.85,colorbalance=bs=0.05:rs=0.03"
@@ -267,7 +186,7 @@ def _july4_look(s, d, now, good_morning):
              (rnd.randint(780, 940), rnd.randint(260, 400))]
     for i, (bx, by) in enumerate(spots):
         t0 = 0.15 + i * 0.7 + rnd.uniform(-0.1, 0.1)
-        color = (GLORY_RED, WHITE, "&H00FF9A4A&", GOLD, GLORY_RED)[i]  # red, white, blue, gold
+        color = (GLORY_RED, WHITE, LIGHT_BLUE, GOLD, GLORY_RED)[i]  # red, white, blue, gold
         s.shape(t0, t0 + 0.3, bx, by, circle(26), WHITE, fade=(0, 250), layer=6, align=5, extra="\\blur8")
         for k in range(24):
             a = 2 * math.pi * k / 24 + rnd.uniform(-0.08, 0.08)
@@ -278,7 +197,7 @@ def _july4_look(s, d, now, good_morning):
     top = "Good Morning!" if good_morning else "Happy 4th of July"
     s.text(0.6, d, 512, 98, top.upper(), ALFA, 66, WHITE, outline=3, shadow=5, shadow_color=GLORY_BLUE, fade=fade,
            layer=7, extra=f"\\3c{GLORY_RED}")
-    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"GL0RYUS NETWORK · {clock(now)}"
+    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"{NETWORK} · {clock(now)}"
     s.text(1.6, d - 0.1, 512, 505, bottom, BARLOW_X, 50, WHITE, spacing=4, shadow=3, shadow_color=GLORY_RED,
            fade=fade, layer=7)
     return "eq=brightness=-0.12:saturation=1.2,vignette=PI/4"
@@ -287,18 +206,68 @@ def _july4_look(s, d, now, good_morning):
 def _thanksgiving_look(s, d, now, good_morning):
     fade = (300, 250)
     rnd = random.Random(now.hour)
-    _drift(s, d, rnd, LEAF, (PUMPKIN, MAPLE, MUSTARD, RUST), 16, scale=(70, 140), sway=90, spin=120)
+    drift(s, 0, d, rnd, LEAF, (PUMPKIN, MAPLE, MUSTARD, RUST), 16, scale=(70, 140), sway=90, spin=120)
     top = "Good Morning!" if good_morning else "Happy Thanksgiving"
     s.text(0.6, d, 512, 98, top.upper(), RYE, 62, PUMPKIN, shadow=5, shadow_color=BROWN, fade=fade, layer=7)
-    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"FROM ALL OF US AT GL0RYUS · {clock(now)}"
+    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"{GREETING} · {clock(now)}"
     s.text(1.6, d - 0.1, 512, 505, bottom, BARLOW_X, 46, CREAM, spacing=4, shadow=3, shadow_color=BROWN,
            fade=fade, layer=7)
     return "eq=brightness=-0.05:saturation=1.1,colorbalance=rs=0.08:gs=0.02:bs=-0.08"
 
 
+def _day_look(season, top, font, size, color, shadow_color, outline=0, outline_color=WHITE, bottom=None,
+              bottom_color=WHITE, bottom_shadow=BLACK, morning="Good Morning!", upper=False, extra="",
+              grade="eq=brightness=-0.06:saturation=1.1"):
+    """A station ID look for a holiday day: the props of the day's card look (solid here), the greeting up top
+    in a display font, and the network (or `bottom`) and the time along the bottom."""
+    def dress(s, d, now, good_morning):
+        fade = (300, 250)
+        look(season).dress(s, 0, d, layer=6, solid=True)
+        text = morning if good_morning else top
+        s.text(0.6, d, 512, 98, text.upper() if upper else text, font, size, color, outline=outline, shadow=5,
+               shadow_color=shadow_color, fade=fade, layer=7, extra=(f"\\3c{outline_color}" if outline else "") + extra)
+        line = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else f"{bottom or NETWORK} · {clock(now)}"
+        s.text(1.6, d - 0.1, 512, 505, line, BARLOW_X, fit(line, BARLOW_X, 50, 960, spacing=4), bottom_color,
+               spacing=4, shadow=3, shadow_color=bottom_shadow, fade=fade, layer=7)
+        return grade
+    return dress
+
+
+PATRIOTIC = dict(font=ALFA, color=WHITE, shadow_color=GLORY_BLUE, outline=3, outline_color=GLORY_RED, upper=True)
+
 LOOKS = {"halloween": _halloween_look, "christmas": _christmas_look, "valentines": _valentines_look,
          "stpatricks": _stpatricks_look, "easter": _easter_look, "july4": _july4_look,
-         "thanksgiving": _thanksgiving_look}
+         "thanksgiving": _thanksgiving_look,
+         "newyearsday": _day_look("newyearsday", "Happy New Year!", LOBSTER, 84, GOLD, GLORY_BLUE, 3, WHITE,
+                                  bottom=GREETING, bottom_shadow=GLORY_BLUE),
+         "mlkday": _day_look("mlkday", "Martin Luther King Jr. Day", ALFA, 52, CREAM, GLORY_BLUE, bottom_color=GOLD,
+                             grade="eq=brightness=-0.06:saturation=0.9"),
+         "groundhog": _day_look("groundhog", "Happy Groundhog Day", CHEWY, 80, WHITE, SLATE, 3, SLATE,
+                                bottom="SIX MORE WEEKS OF WINTER?", bottom_color=SKY,
+                                grade="eq=brightness=-0.03:saturation=0.8,colorbalance=bs=0.06"),
+         "mardigras": _day_look("mardigras", "Happy Mardi Gras", LOBSTER, 84, GOLD, MARDI_GREEN, 3, PURPLE,
+                                bottom_color=GOLD, bottom_shadow=PURPLE,
+                                grade="eq=saturation=1.2,colorbalance=rs=0.04:bs=0.06"),
+         # The greeting starts upside down and flips the right way up
+         "aprilfools": _day_look("aprilfools", "Happy April Fools' Day", CHEWY, 74, SLIME, PURPLE, 3, BLACK,
+                                 extra="\\frz180\\t(1000,1400,\\frz360)", grade="hue=h=40,eq=saturation=1.15"),
+         "cincodemayo": _day_look("cincodemayo", "¡Feliz Cinco de Mayo!", CHEWY, 76, PAPEL_COLORS[4], PAPEL_COLORS[2],
+                                  3, PAPEL_COLORS[0], bottom_shadow=PAPEL_COLORS[2],
+                                  grade="eq=brightness=-0.02:saturation=1.2"),
+         "mothersday": _day_look("mothersday", "Happy Mother's Day", LOBSTER, 82, WHITE, WINE, 3, ROSE,
+                                 bottom=GREETING, bottom_color=BLUSH, bottom_shadow=WINE, morning="Good Morning, Mom!",
+                                 grade="eq=brightness=-0.04:saturation=1.15,colorbalance=rs=0.08"),
+         "memorialday": _day_look("memorialday", "Memorial Day", size=70, bottom="HONORING THOSE WHO GAVE ALL",
+                                  grade="eq=brightness=-0.1:saturation=0.8,vignette=PI/4", **PATRIOTIC),
+         "fathersday": _day_look("fathersday", "Happy Father's Day", RYE, 62, MUSTARD, DEEP_NAVY, bottom=GREETING,
+                                 bottom_color=CREAM, bottom_shadow=DEEP_NAVY, morning="Morning, Dad!", upper=True,
+                                 grade="eq=brightness=-0.04:saturation=1.05"),
+         "juneteenth": _day_look("juneteenth", "Happy Juneteenth", size=70, bottom_color=GOLD,
+                                 grade="eq=brightness=-0.08:saturation=1.1", **PATRIOTIC),
+         "laborday": _day_look("laborday", "Happy Labor Day", size=66, bottom_shadow=GLORY_RED,
+                               grade="eq=brightness=-0.1:saturation=1.15", **PATRIOTIC),
+         "veteransday": _day_look("veteransday", "Veterans Day", size=70, bottom="THANK YOU FOR YOUR SERVICE",
+                                  grade="eq=brightness=-0.08:saturation=0.9,vignette=PI/4", **PATRIOTIC)}
 
 
 # --- Holiday reminders ---
@@ -306,45 +275,51 @@ LOOKS = {"halloween": _halloween_look, "christmas": _christmas_look, "valentines
 REMINDER_TIPS = {"Valentine's Day": "FLOWERS · CHOCOLATE · DINNER PLANS"}
 
 
-def reminder(name, when, now):
+def reminder(name, when, now, season=None):
     """A heads-up in the breaks ahead of a day you're expected to get someone something or spend time with
     them (Valentine's, Mother's and Father's Day), counting down through the day itself."""
     d = 7.0  # the Up Next card's music bed
     days = (when - now.date()).days
+    lk = look(season)
     s = Script()
+    lk.dress(s, 0, d)
     kicker = "TODAY IS" if days == 0 else "DON'T FORGET" if days == 1 else "HEADS UP"
-    s.text(0, d, 512, 150, kicker, BARLOW_X, 50, MUSTARD, spacing=6)
+    s.text(0, d, 512, 150, kicker, BARLOW_X, 50, lk.accent, spacing=6)
     title = name.upper()
-    s.text(0.1, d, 512, 240, title, ARCHIVO, fit(title, ARCHIVO, 92, 900), shadow=6, slant=-0.15)
-    stripes(s, 0, d, 190, 305, 640)
+    s.text(0.1, d, 512, 240, title, ARCHIVO, fit(title, ARCHIVO, 92, 900), lk.headline, shadow=6,
+           shadow_color=lk.shadow, slant=-0.15)
+    stripes(s, 0, d, 190, 305, 640, colors=lk.stripes)
     date = when.strftime("%A, %B %-d").upper()
     line = date if days == 0 else f"TOMORROW · {date}" if days == 1 else f"{date} · {days} DAYS AWAY"
     s.text(0.4, d, 512, 405, line, BARLOW_X, 46, CREAM, spacing=2)
     tip = "MAKE SOME TIME FOR THEM TODAY" if days == 0 else REMINDER_TIPS.get(name, "A CARD, A GIFT OR A VISIT")
-    s.text(0.7, d, 512, 470, tip, BARLOW_B, 38, MUSTARD, spacing=6)
-    return Card(cards.lavfi_url(s.write("reminder"), d, music("upnext_bed.ogg")), d, "reminder")
+    s.text(0.7, d, 512, 470, tip, BARLOW_B, 38, lk.accent, spacing=6)
+    return Card(cards.lavfi_url(s.write("reminder"), d, music("upnext_bed.ogg"), background=lk.bg), d, "reminder")
 
 
 # --- Marathons ---
 
 def marathon(name, series_name, start, season=None):
-    """Opens a marathon block: "FRIDAY NIGHT / MARATHON / The Simpsons"."""
+    """Opens a marathon block: "FRIDAY NIGHT / MARATHON / The Simpsons", in the season's look."""
     d = MARATHON_SECONDS
+    lk = look(season)
     s = Script()
+    lk.dress(s, 0, d)
     kicker = name.upper().replace("MARATHON", "").strip() or "TONIGHT"
-    s.text(0, d, 512, 120, kicker, BARLOW_X, 54, MUSTARD, spacing=10, fade=(250, 300))
-    s.text(0.15, d, 512, 222, "MARATHON", ARCHIVO, 128, shadow=7, slant=-0.15, fade=(250, 300),
-           extra="\\t(0,250,\\fscx112\\fscy112)\\t(250,450,\\fscx100\\fscy100)")
-    stripes(s, 0.2, d, 190, 300, 640)
+    s.text(0, d, 512, 120, kicker, BARLOW_X, 54, lk.accent, spacing=10, fade=(250, 300))
+    s.text(0.15, d, 512, 222, "MARATHON", ARCHIVO, 128, lk.headline, shadow=7, shadow_color=lk.shadow, slant=-0.15,
+           fade=(250, 300), extra="\\t(0,250,\\fscx112\\fscy112)\\t(250,450,\\fscx100\\fscy100)")
+    stripes(s, 0.2, d, 190, 300, 640, colors=lk.stripes)
     series_name = clip_text(series_name.upper(), 30)
-    s.text(0.5, d, 512, 405, series_name, BARLOW_X, fit(series_name, BARLOW_X, 76, 880), CREAM, shadow=3)
+    s.text(0.5, d, 512, 405, series_name, BARLOW_X, fit(series_name, BARLOW_X, 76, 880), CREAM, shadow=3,
+           shadow_color=lk.shadow)
     if season == "halloween":
         s.text(1.0, d, 512, 492, "HALLOWEEN EDITION", CREEPSTER, 52, ORANGE, shadow=4, shadow_color=PURPLE)
     elif season == "christmas":
         s.text(1.0, d, 512, 492, "HOLIDAY EDITION", XMAS, 56, XMAS_RED, outline=3, extra=f"\\3c{WHITE}\\b1")
     else:
-        s.text(1.0, d, 512, 492, f"BACK TO BACK STARTING NOW · {clock(start)}", BARLOW_S, 38, MUSTARD, spacing=4)
-    return Card(cards.lavfi_url(s.write("marathon"), d, music("marathon_sting.ogg")), d, "card")
+        s.text(1.0, d, 512, 492, f"BACK TO BACK STARTING NOW · {clock(start)}", BARLOW_S, 38, lk.accent, spacing=4)
+    return Card(cards.lavfi_url(s.write("marathon"), d, music("marathon_sting.ogg"), background=lk.bg), d, "card")
 
 
 # --- Snipe ---
@@ -416,11 +391,64 @@ def promo(panels, start, panel_seconds=4.5):
     return s.write("promo")
 
 
+# --- Pop-Up Video ---
+
+POPUP_SECONDS = 6.5     # each bubble's time on screen
+POPUP_FIRST = 20.0      # the first, once the lower third has gone
+POPUP_END_GAP = 15.0    # none this close to the end
+POPUP_EVERY = 22.0      # at most one this often
+POPUP_W, POPUP_TEXT = 480, 42
+# Where the bubbles go, in turn (their top-left corners): clear of the corner bug, and of the lower third
+# (which is gone by POPUP_FIRST)
+POPUP_SLOTS = ((70, 52), (474, 52), (70, 220), (474, 220))
+
+
+def _bubble(w, h, r, tail_x):
+    """An ASS drawing of a w x h speech bubble with rounded corners of radius r and a tail under it at
+    tail_x, starting at 0,0."""
+    c = r * 0.552   # how far a cubic's handles sit from a quarter circle's ends
+    body = (f"m {r} 0 l {w - r} 0 b {w - r + c} 0 {w} {r - c} {w} {r} l {w} {h - r} "
+            f"b {w} {h - r + c} {w - r + c} {h} {w - r} {h} l {r} {h} b {r - c} {h} 0 {h - r + c} 0 {h - r} "
+            f"l 0 {r} b 0 {r - c} {r - c} 0 {r} 0")
+    return body + f" m {tail_x} {h - 2} l {tail_x + 34} {h - 2} l {tail_x - 6} {h + 26}"
+
+
+def popups(facts, duration, begin=0.0):
+    """An ASS file of Pop-Up Video bubbles for the vf chain: the facts in turn over a music video of
+    `duration` seconds, spread from POPUP_FIRST to POPUP_END_GAP before the end, at file times. Bubbles
+    before `begin` (where playback joins) are left out. None if none fit."""
+    from retrotv_screens import wrap
+    span = duration - POPUP_END_GAP - POPUP_FIRST - POPUP_SECONDS
+    if span < 0 or not facts:
+        return None
+    n = min(len(facts), 1 + int(span // POPUP_EVERY))
+    gap = span / (n - 1) if n > 1 else 0
+    s = Script()
+    shown = 0
+    for i, fact in enumerate(facts[:n]):
+        a = POPUP_FIRST + i * gap
+        if a < begin + 1:
+            continue
+        x, y = POPUP_SLOTS[i % len(POPUP_SLOTS)]
+        lines = wrap(fact, BARLOW_X, POPUP_TEXT, POPUP_W - 44, max_lines=4)
+        h = 34 + len(lines) * (POPUP_TEXT + 4)
+        # Pops in: a quick overshoot from small, the way the bubbles did
+        pop = "\\fscx25\\fscy25\\t(0,150,\\fscx108\\fscy108)\\t(150,230,\\fscx100\\fscy100)"
+        s.shape(a, a + POPUP_SECONDS, x + POPUP_W / 2, y + (h + 26) / 2, _bubble(POPUP_W, h, 24, 70 + i % 2 * 240),
+                WHITE, fade=(0, 160), layer=1, align=5, extra=pop + "\\bord4\\3c&H00000000&")
+        s.raw(a, a + POPUP_SECONDS, f"\\an5\\pos({x + POPUP_W / 2:.0f},{y + h / 2:.0f})\\fn{BARLOW_X}"
+                                    f"\\fs{POPUP_TEXT}\\c&H00141414&\\bord0\\shad0\\fad(0,160){pop}",
+              "\\N".join(esc(l) for l in lines), layer=2)
+        shown += 1
+    return s.write("popups") if shown else None
+
+
 # --- Lottery ---
 
 BALL_COLORS = ("&H003030E0&", "&H002090F0&", "&H0020D0F0&", "&H0040C050&", "&H00E08040&")  # by tens
 LOTTO_BACKGROUND = "0x14082e"
-DRUM_X, DRUM_Y, DRUM_R = 512, 292, 148
+LOTTO_BAND = "&H00401A2C&"
+DRUM_X, DRUM_Y, DRUM_R = 512, 330, 132   # under the info screens' header
 TRAY_Y = 528
 ORDINALS = ("FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH")
 
@@ -433,24 +461,19 @@ def _ball(s, start, end, x, y, number, extra="", layer=5, r=40):
            layer=layer + 2, extra=extra)
 
 
-def lottery(when):
+def lottery(when, season=None):
     """The late-night drawing: six balls and a bonus ball from a tumbling drum, with a recap."""
     d = LOTTERY_SECONDS
     numbers = random.sample(range(1, 50), 7)
     s = Script()
     fade = (400, 600)
-    # Studio: header, the drum, the tray
-    s.text(0, d, 70, 70, "GL0RYUS LOTTO", ARCHIVO, 58, YELLOW, align=4, shadow=5, shadow_color=PURPLE,
-           slant=-0.12, fade=fade)
-    stripes(s, 0, d, 70, 104, 360, bar=6, gap=3, slide=True, fade=fade)
-    s.text(0, d, 954, 62, "PICK 6 + BONUS", BARLOW_X, 40, CREAM, align=6, spacing=4, fade=fade)
-    s.text(0, d, 954, 106, f"{clock(when)} DRAWING · {when.strftime('%a %b %d').upper()}", BARLOW_S, 32, SKY,
-           align=6, fade=fade)
+    # Studio: header, the drum (its chute hanging from the header), the tray
+    info_header(s, d, [(0, d, "Lotto · Pick 6 + Bonus")], when, band=LOTTO_BAND, season=season)
     s.shape(0, d, DRUM_X, DRUM_Y, circle(DRUM_R + 8), "&H00603018&", fade=fade, layer=1, align=5,
             extra="\\1a&H90&")
     s.raw(0, d, f"\\an5\\pos({DRUM_X},{DRUM_Y})\\bord5\\shad0\\3c{SKY}\\1a&HFF&\\fad({fade[0]},{fade[1]})\\p1",
           circle(DRUM_R), layer=8)
-    s.shape(0, d, DRUM_X - 14, DRUM_Y - DRUM_R - 40, rect(28, 42), SKY, fade=fade, layer=8, align=7,
+    s.shape(0, d, DRUM_X - 14, 174, rect(28, DRUM_Y - DRUM_R - 172), SKY, fade=fade, layer=8, align=7,
             extra="\\1a&H40&")
     for i in range(7):
         x = 140 + i * 112 + (50 if i == 6 else 0)
@@ -482,18 +505,18 @@ def lottery(when):
         _ball(s, t + 0.7, d, x, TRAY_Y, n, layer=10)
         call = "AND THE BONUS BALL IS" if i == 6 else f"THE {ORDINALS[i]} NUMBER IS"
         until = min(t + 5.5, LOTTERY_BONUS - 0.3) if i < 6 else 50.0
-        s.text(t - 1.2, until, 954, 160, call, BARLOW_X, 34, CREAM, align=6, spacing=3, fade=(200, 200), layer=12)
-        s.text(t, until, 954, 228, str(n), ARCHIVO, 96, YELLOW, align=6, shadow=5, shadow_color=PURPLE,
+        s.text(t - 1.2, until, 954, 222, call, BARLOW_X, 30, CREAM, align=6, spacing=3, fade=(200, 200), layer=12)
+        s.text(t, until, 954, 292, str(n), ARCHIVO, 96, YELLOW, align=6, shadow=5, shadow_color=PURPLE,
                fade=(0, 200), layer=12, extra="\\t(0,180,\\fscx130\\fscy130)\\t(180,400,\\fscx100\\fscy100)")
 
     # Recap
-    s.shape(50.0, d, 0, 150, rect(W, 300), "&H00100410&", fade=(400, 600), layer=14, extra="\\1a&H30&")
-    s.text(50.2, d, 512, 205, "TONIGHT'S WINNING NUMBERS", BARLOW_X, 50, MUSTARD, spacing=6, fade=(300, 600),
+    s.shape(50.0, d, 0, 180, rect(W, 290), "&H00100410&", fade=(400, 600), layer=14, extra="\\1a&H30&")
+    s.text(50.2, d, 512, 228, "TONIGHT'S WINNING NUMBERS", BARLOW_X, 50, MUSTARD, spacing=6, fade=(300, 600),
            layer=15)
-    s.text(50.6, d, 512, 300, "  ".join(f"{n:02d}" for n in numbers[:6]), ARCHIVO, 70, WHITE, shadow=5,
+    s.text(50.6, d, 512, 318, "  ".join(f"{n:02d}" for n in numbers[:6]), ARCHIVO, 70, WHITE, shadow=5,
            shadow_color=PURPLE, fade=(300, 600), layer=15)
-    s.text(51.0, d, 512, 380, f"BONUS {numbers[6]:02d}", BARLOW_X, 48, YELLOW, spacing=4, fade=(300, 600), layer=15)
-    s.text(52.0, d, 512, 430, "GL0RYUS LOTTO IS FOR ENTERTAINMENT ONLY. NO TICKETS. NO PRIZES. NO KIDDING.",
+    s.text(51.0, d, 512, 398, f"BONUS {numbers[6]:02d}", BARLOW_X, 48, YELLOW, spacing=4, fade=(300, 600), layer=15)
+    s.text(52.0, d, 512, 448, f"{CHANNEL} LOTTO IS FOR ENTERTAINMENT ONLY. NO TICKETS. NO PRIZES. NO KIDDING.",
            BARLOW_S, 26, SKY, fade=(400, 600), layer=15)
     return Card(cards.lavfi_url(s.write("lottery"), d, music("lotto_bed.ogg"), background=LOTTO_BACKGROUND),
                 d, "lottery")
@@ -524,7 +547,7 @@ def new_year(year):
            slant=-0.12, fade=(200, 1200), layer=8)
     s.text(m + 0.5, d, 512, 330, str(year), ARCHIVO, 200, WHITE, shadow=8, shadow_color=SHADOW_RED,
            fade=(200, 1200), layer=8, extra="\\fscx40\\fscy40\\t(0,500,\\fscx110\\fscy110)\\t(500,800,\\fscx100\\fscy100)")
-    s.text(m + 1.5, d, 512, 492, "FROM ALL OF US AT THE GL0RYUS NETWORK", BARLOW_X, 40, MUSTARD, spacing=6,
+    s.text(m + 1.5, d, 512, 492, f"FROM ALL OF US AT THE {NETWORK}", BARLOW_X, 40, MUSTARD, spacing=6,
            fade=(400, 1200), layer=8)
     colors = (YELLOW, WHITE, "&H003030E0&", "&H0040C050&", "&H00E08040&", "&H00D040D0&", MUSTARD)
     for _ in range(140):

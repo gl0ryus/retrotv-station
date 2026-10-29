@@ -1,0 +1,10 @@
+[Unit]
+Description=Refresh the RetroTV headline quips every 2 hours while on air
+
+[Timer]
+OnCalendar=*-*-* 00,08,10,12,14,16,18,20,22:05:00
+RandomizedDelaySec=120
+Persistent=true
+
+[Install]
+WantedBy=timers.target
