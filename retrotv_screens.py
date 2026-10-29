@@ -36,6 +36,8 @@ FLORIDA_LOCATIONS = (12, 27)  # Cape Canaveral SFS, Kennedy Space Center
 SKY_FILE = os.path.join(DATA_DIR, "sky.json")   # tonight's sky over the house, worked out by retrotv_news.py
 POPUPS_FILE = os.path.join(DATA_DIR, "popups.json")   # Pop-Up Video facts by meta.popup_key, from retrotv_news.py
 ANNIVERSARY_FILE = os.path.join(DATA_DIR, "anniversary.json")   # each day's anniversary episode, from retrotv_news.py
+ART_FILE = os.path.join(DATA_DIR, "art.json")   # the day's Art Break picture, drawn by Claude (retrotv_news.py)
+ART_W, ART_H = 800, 356                         # its canvas, between the info header and the caption
 
 
 def fetch_json(name, url, max_age_minutes, stale_hours=24):
@@ -779,6 +781,54 @@ def markets(now, season=None):
     s.text(0.8, d, 512, 566, sources.upper(), BARLOW_B, 28, "&H00B0B8B0&", spacing=1, fade=fade, layer=3)
     return Card(lavfi_url(s.write("markets"), d, music("weather_bed.ogg"), background=MARKET_BACKGROUND, loop=True),
                 d, "markets")
+
+
+# --- Art Break ---
+
+ART_X, ART_Y = (W - ART_W) // 2, 186
+ART_PATH = re.compile(r"^[mnlbsc0-9.\s-]+$")
+
+
+def placed(path):
+    """(path moved to start at 0,0, its left, its top): libass places a drawing by its bounding box, so a
+    shape drawn in canvas coordinates goes at the box's corner."""
+    tokens = path.split()
+    numbers = [i for i, t in enumerate(tokens) if not t.isalpha()]
+    xs = [float(tokens[i]) for k, i in enumerate(numbers) if k % 2 == 0]
+    ys = [float(tokens[i]) for k, i in enumerate(numbers) if k % 2 == 1]
+    x0, y0 = min(xs), min(ys)
+    for k, i in enumerate(numbers):
+        tokens[i] = f"{float(tokens[i]) - (x0 if k % 2 == 0 else y0):.0f}"
+    return " ".join(tokens), x0, y0
+
+
+def art_break(now, season=None):
+    """Art Break: the day's picture from ART_FILE drawn shape by shape, back to front, like an old paint
+    program, then held under its caption. None without a picture for today."""
+    try:
+        with open(ART_FILE) as f:
+            art = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if art.get("day") != (now - datetime.timedelta(hours=9)).date().isoformat() or not art.get("shapes"):
+        return None
+    shapes = art["shapes"]
+    d = 24.0
+    draw = min(14.0, 0.35 * len(shapes))   # the drawing, then the finished picture held
+    s = Script()
+    info_header(s, d, [(0, d, "Art Break")], now, band="&H00402818&", season=season)
+    s.shape(0, d, ART_X - 6, ART_Y - 6, rect(ART_W + 12, ART_H + 12), "&H00E8E8E8&", fade=(300, 400), layer=1)
+    s.shape(0, d, ART_X, ART_Y, rect(ART_W, ART_H), "&H00FFFFFF&", fade=(300, 400), layer=1)
+    for i, shape in enumerate(shapes):
+        a = 0.8 + draw * i / len(shapes)
+        path, x0, y0 = placed(shape["path"])
+        r, g, b = (int(shape["color"][k:k + 2], 16) for k in (1, 3, 5))
+        s.shape(a, d, ART_X + x0, ART_Y + y0, path, f"&H00{b:02X}{g:02X}{r:02X}&", fade=(180, 400), layer=2,
+                extra="\\clip(" + f"{ART_X},{ART_Y},{ART_X + ART_W},{ART_Y + ART_H})")
+    caption = art.get("title", "").upper()
+    s.text(draw + 1.2, d, W // 2, ART_Y + ART_H + 1, caption, BARLOW_X, fit(caption, BARLOW_X, 30, 800), MUSTARD,
+           align=8, spacing=4, fade=(400, 400), layer=3)
+    return Card(lavfi_url(s.write("art"), d, music("blurb_vapor1.ogg"), background="0x101418", loop=True), d, "art")
 
 
 # --- Anniversary Airing ---

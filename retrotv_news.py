@@ -1,5 +1,6 @@
 """
-What the text bumps (retrotv_blurbs) get from Claude, every couple of hours (retrotv-news.timer on the Pi):
+What the station gets from Claude and the slower libraries, every couple of hours (retrotv-news.timer on the
+Pi), each step on its own so one failing doesn't stop the rest:
 
 - Headline quips. The new headlines from UPI's Odd News feed, each with a quip at every level a headline can
   air at (levels_for("news"): cheeky and raunchy), the last NEWS_MAX_AGE_HOURS of them kept in NEWS_FILE. Odd
@@ -7,6 +8,8 @@ What the text bumps (retrotv_blurbs) get from Claude, every couple of hours (ret
   death, an injury, a victim or a disaster.
 - Show riffs. RIFFS_PER_LEVEL riffs per level on each show coming up on the main channel (from the remote's
   guide), kept by show name in SHOW_RIFFS_FILE and reused; a show gets more once one level's have all aired.
+- Tonight's Sky (skyfield), the Anniversary Airing pick and the Art Break picture, once per broadcast day.
+- Pop-Up Video facts for the cached music videos, from Wikipedia, a few a run within JOB_BUDGET.
 
 This runs in its own venv (~/retrotv_venv, requirements-news.txt) and the station never imports it, so a failed
 run only means nothing new to say. The API key is on the Pi's SD card in KEY_FILE, readable only by the
@@ -32,7 +35,8 @@ import anthropic
 from retrotv_blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
                             riff_key, _seen as aired_lately)
 from retrotv_meta import air_date, artist_key, music_credit, popup_key
-from retrotv_screens import ANNIVERSARY_FILE, DATA_DIR, POPUPS_FILE, SKY_FILE, USER_AGENT
+from retrotv_screens import (ANNIVERSARY_FILE, ART_FILE, ART_H, ART_PATH, ART_W, DATA_DIR, POPUPS_FILE, SKY_FILE,
+                             USER_AGENT)
 
 logger = logging.getLogger("RetroTV.news")
 
@@ -181,7 +185,24 @@ Never politics, wars, deaths, disasters, crime or illness, and nothing obscure o
 Each one under 64 characters, past tense, a plain sentence starting with a capital ("The Nintendo Wii launched \
 in North America."). Use only what the text says. Return no lines if nothing fits."""
 
+ART_SYSTEM = f"""You draw the Art Break for GL0RYUS Network, a retro TV station: a small picture that builds up \
+on screen shape by shape, like a 1990s paint program demo or a station's slide between shows.
+
+Draw one scene as filled vector shapes on a {ART_W} x {ART_H} canvas (origin top left, y down). Each shape is an \
+ASS drawing path: "m x y" moves, "l x y" draws lines (several points may follow one l), "b x1 y1 x2 y2 x3 y3" \
+draws a cubic curve; every shape is closed and filled. Whole numbers only, all inside the canvas.
+
+- 25 to 50 shapes, back to front: the sky or background first, big shapes next, small details last
+- flat colours from a bold 16-colour palette, as "#RRGGBB"; no gradients, no outlines, no text or letters
+- a clear, simple scene that reads at a glance on an old TV: one subject, strong silhouettes
+- the title is a short lowercase caption, 2 to 5 words ("pumpkin patch at dusk")"""
+
 NEWS_SCHEMA = _schema("quips", {level: {"type": "string"} for level in NEWS_LEVELS})
+ART_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["title", "shapes"], "properties": {
+    "title": {"type": "string"},
+    "shapes": {"type": "array", "items": {
+        "type": "object", "additionalProperties": False, "required": ["color", "path"],
+        "properties": {"color": {"type": "string"}, "path": {"type": "string"}}}}}}
 WEEK_SCHEMA = {"type": "object", "properties": {"lines": {"type": "array", "items": {"type": "string"}}},
                "required": ["lines"], "additionalProperties": False}
 POPUP_SCHEMA = _schema("videos", {"facts": {"type": "array", "items": {"type": "string"}}})
@@ -379,7 +400,8 @@ def wiki_article(artist, song):
         hits = _wiki(action="query", list="search", srsearch=query, srlimit=5)["query"]["search"]
         for hit in hits:
             title = hit["title"]
-            if artist_key(re.sub(r"\s*\([^)]*\)$", "", title)) != artist_key(want):   # "Song (Band song)"
+            if ("disambiguation" in title.lower()
+                    or artist_key(re.sub(r"\s*\([^)]*\)$", "", title)) != artist_key(want)):   # "Song (Band song)"
                 continue
             page = _wiki(action="query", prop="extracts", explaintext=1, redirects=1, titles=title)["query"]["pages"][0]
             text = page.get("extract", "")
@@ -443,6 +465,39 @@ def popup_facts():
                 logger.info(f"Nothing to say for {artist} - {song}")
         save(POPUPS_FILE, {"videos": videos, "missing": missing[-2000:]})   # after each batch
     save(POPUPS_FILE, {"videos": videos, "missing": missing[-2000:]})
+
+
+# --- Art Break ---
+
+def _good_shape(shape):
+    """Whether a shape from Claude is safe to draw: a colour, and a path of drawing commands and whole
+    coordinate pairs inside the canvas."""
+    path, colour = shape.get("path", ""), shape.get("color", "")
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", colour) or not ART_PATH.match(path) or len(path) > 4000:
+        return False
+    numbers = [t for t in path.split() if not t.isalpha()]
+    try:
+        values = [float(t) for t in numbers]
+    except ValueError:
+        return False
+    return (len(values) >= 6 and len(values) % 2 == 0 and all(-2 <= v <= ART_W + 2 for v in values[::2])
+            and all(-2 <= v <= ART_H + 2 for v in values[1::2]))
+
+
+def draw_art():
+    """Once per broadcast day, has Claude draw the Art Break picture for screens.art_break: something for
+    the date (a holiday that's near, else the season), kept in ART_FILE."""
+    day = _broadcast_day()
+    if load(ART_FILE).get("day") == day.isoformat():
+        return
+    answer = ask(ART_SYSTEM, f"Today is {day:%A, %B} {day.day}, {day.year}. Draw something for the date: a holiday "
+                             f"within the week if there is one, otherwise the season or the time of year.", ART_SCHEMA)
+    shapes = [s for s in answer["shapes"] if _good_shape(s)][:60]
+    if len(shapes) < 8:
+        raise RuntimeError(f"only {len(shapes)} usable shapes")
+    title = re.sub(r"\s+", " ", answer["title"]).strip().lower()[:40]
+    save(ART_FILE, {"day": day.isoformat(), "title": title, "shapes": shapes})
+    logger.info(f"Art Break for {day}: {title} ({len(shapes)} of {len(answer['shapes'])} shapes)")
 
 
 # --- Anniversary airings ---
@@ -597,7 +652,7 @@ def sky_tonight():
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     failed = False
-    for step in (quip_headlines, riff_shows, sky_tonight, pick_anniversaries, popup_facts):
+    for step in (quip_headlines, riff_shows, sky_tonight, pick_anniversaries, draw_art, popup_facts):
         try:
             step()
         except Exception:   # one step failing doesn't keep the other from running
