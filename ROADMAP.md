@@ -28,11 +28,10 @@ Raised 2026-10-29, once the key was on the Pi for the headline bumps (`retrotv_n
 - **Weather with attitude.** A one-line quip on the weather card about today's forecast. Change: one line in `cards.weather`, written when the forecast is fetched.
 
 ### New kinds of cards
-Raised 2026-10-29.
-- **Pop-Up Video.** VH1-style fact bubbles over the music videos. Claude picks 5 or 6 facts from the song's Wikipedia page (facts from the page only, nothing from memory) and times them across the video. Change: an ASS subtitle track per video, added with mpv `sub-add`.
-- **Teletext.** A Ceefax-style card of blocky 40-column pages in 8 colours (P100 index, P302 weather, P401 tonight's listings, P555 odd news), flipping like a real set. Claude fits each page's data to the 40×22 grid.
-- **Art break.** A small picture for the day (the season, or a moment from Today in History), drawn stroke by stroke on screen like an old paint program, over a calm bed. Claude writes the drawing as ASS vector shapes. Prototype it first to check the drawings come out well enough.
-- **Viewer poll.** A poll card ("best 80s theme song?") voted on from the phone remote; the results card airs a few breaks later. Claude writes the polls from what's on that night.
-- **Your countdown.** An MTV-style weekly top 10 from your own Last.fm scrobbles, ending on the number one artist's video if it's in the library. The scrobble tools are in `my-projects\lastfm`.
-- **Anniversary airing.** "Aired 30 years ago tonight": a card, then that episode, using the original air dates the station already reads (`meta.air_date`). Claude adds a line on what else was going on that week.
-- **Tonight's sky.** ISS passes over the house, the moon phase and the planets out tonight, with where to look. It needs `skyfield` and its ephemeris in the venv.
+Raised 2026-10-29. All but the viewer poll were built that day; Dan scrapped the poll.
+- **Pop-Up Video.** Built: fact bubbles over the music videos, picked by Claude from each song's (or artist's) Wikipedia article only. `retrotv_news.popup_facts`, `events.popups`.
+- **Teletext.** Built: G|TV Text, five pages (P100, P401, P302, P220, P555) in Bedstead. `screens.teletext`.
+- **Art break.** Built: Claude draws a scene for the day as vector shapes; the card builds it up shape by shape. `retrotv_news.draw_art`, `screens.art_break`.
+- **Your countdown.** Built: the Weekly Countdown from Last.fm opens the set-time music blocks, then the best placed artist's video. `screens.countdown`, `COUNTDOWN_BLOCKS`.
+- **Anniversary airing.** Built: From the Vault at 8 PM, an episode first aired on this date years ago, with a "That week" line. `retrotv_news.pick_anniversaries`, `Station._queue_anniversary`.
+- **Tonight's sky.** Built: moon, planets and evening ISS passes, sunset to sign-off. `retrotv_news.sky_tonight`, `screens.tonight_sky`.

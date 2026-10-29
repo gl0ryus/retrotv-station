@@ -2898,8 +2898,10 @@ class Station:
         if kind == "teletext":
             data = (cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ) if WEATHER_LAT is not None
                     else None)
-            return screens.teletext(airs_at, data, WEATHER_PLACE, self.guide_rows(first_start), blurbs.headlines(),
-                                    season)
+            # The show on now and the lineup as planned: unlike guide_rows, this works in a mid-show break too
+            listings = [(round_time(s.start), s.name, s.episode)
+                        for s in [self.current_show] + self.lineup.snapshot() if s and s.start]
+            return screens.teletext(airs_at, data, WEATHER_PLACE, listings, blurbs.headlines(), season)
         if kind == "reminder":
             upcoming = next_reminder(airs_at.date())
             return events.reminder(*upcoming, airs_at, season) if upcoming else None
