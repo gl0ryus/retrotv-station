@@ -139,6 +139,7 @@ SPECIALS = {
     "markets": 90,   # BTC, ETH and the S&P 500 with their 24-hour change (CoinGecko, Yahoo Finance)
     "reminder": 120, # a heads-up before Valentine's, Mother's and Father's Day (see REMINDERS)
     "blurb": 30,     # text bumps: facts, food for thought, dad jokes, raunchier late at night (retrotv_blurbs)
+    "sky": 120,      # Tonight's Sky: the moon, planets and ISS passes over the house, sunset to sign-off
 }
 # How far the text bumps go: clean until BLURB_CHEEKY_HOUR, cheeky until BLURB_RAUNCHY_HOUR, raunchy to sign-off
 # (crude, never hateful). Always clean in the kids' dayparts
@@ -2855,6 +2856,8 @@ class Station:
             return screens.whos_in_space(airs_at, season)
         if kind == "markets":
             return screens.markets(airs_at, season)
+        if kind == "sky":
+            return screens.tonight_sky(airs_at, season)
         if kind == "reminder":
             upcoming = next_reminder(airs_at.date())
             return events.reminder(*upcoming, airs_at, season) if upcoming else None

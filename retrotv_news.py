@@ -28,7 +28,7 @@ import anthropic
 
 from retrotv_blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
                             riff_key, _seen as aired_lately)
-from retrotv_screens import USER_AGENT
+from retrotv_screens import DATA_DIR, SKY_FILE, USER_AGENT
 
 logger = logging.getLogger("RetroTV.news")
 
@@ -41,6 +41,12 @@ MAX_SHOWS = 6            # shows sent per run, likewise
 RIFFS_PER_LEVEL = 4      # asked for per show and level each time
 RIFFS_KEEP = 12          # kept per show and level; the oldest go first
 SKIPPED_KEEP = 500       # headlines and shows Claude passed on, remembered so they aren't sent again
+LOCATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "location.json")   # as retro_station's
+SKYFIELD_DIR = os.path.join(DATA_DIR, "skyfield")   # the planets' ephemeris (de421.bsp, 17 MB), fetched once
+ISS_TLE = "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=tle"
+SKY_SIGN_OFF_HOUR = 2    # the night ends at retro_station's SIGN_OFF_HOUR, the next day
+PLANETS = (("Mercury", "mercury"), ("Venus", "venus"), ("Mars", "mars"), ("Jupiter", "jupiter barycenter"),
+           ("Saturn", "saturn barycenter"))
 PREFIX = re.compile(r"^(?:look|watch|video|listen|photos?)\s*:\s*", re.I)   # UPI's "Watch: ..." and the like
 
 
@@ -305,10 +311,85 @@ def riff_shows():
     save(SHOW_RIFFS_FILE, {"shows": shows, "unknown": unknown[-SKIPPED_KEEP:]})
 
 
+# --- Tonight's sky ---
+
+def sky_tonight():
+    """Works out tonight's sky over the house for screens.tonight_sky, once per broadcast day: sunset, the
+    moon, the planets out after dark (where and when they're highest) and the ISS passes you can see in the
+    next 3 days (lit by the sun while the sky is dark). Times are Unix timestamps."""
+    from skyfield import almanac
+    from skyfield.api import EarthSatellite, Loader, wgs84
+    from skyfield.magnitudelib import planetary_magnitude
+
+    now = datetime.datetime.now().astimezone()
+    day = (now - datetime.timedelta(hours=9)).date()   # the broadcast day: until sign-on, it's still last night
+    if load(SKY_FILE).get("day") == day.isoformat():
+        return
+    with open(LOCATION_FILE) as f:
+        place = json.load(f)
+    loader = Loader(SKYFIELD_DIR, verbose=False)
+    ts, eph = loader.timescale(), loader("de421.bsp")
+    earth, sun = eph["earth"], eph["sun"]
+    here = wgs84.latlon(place["lat"], place["lon"])
+    observer = earth + here
+    noon = datetime.datetime.combine(day, datetime.time(12)).astimezone()
+    end = datetime.datetime.combine(day + datetime.timedelta(days=1), datetime.time(SKY_SIGN_OFF_HOUR))
+    end = end.astimezone()
+    sets, _ = almanac.find_settings(observer, sun, ts.from_datetime(noon), ts.from_datetime(end))
+    sunset = sets[0].utc_datetime()
+
+    def dark(t):
+        return observer.at(t).observe(sun).apparent().altaz()[0].degrees < -6
+
+    planets = []
+    for name, body in PLANETS:
+        best = None
+        for minutes in range(45, int((end - sunset).total_seconds() // 60), 15):
+            t = ts.from_datetime(sunset + datetime.timedelta(minutes=minutes))
+            alt, az, _ = observer.at(t).observe(eph[body]).apparent().altaz()
+            if alt.degrees > 10 and dark(t) and (best is None or alt.degrees > best[1]):
+                best = (t, alt.degrees, az.degrees)
+        if best:
+            magnitude = float(planetary_magnitude(earth.at(best[0]).observe(eph[body])))
+            planets.append({"name": name, "time": best[0].utc_datetime().timestamp(), "alt": round(best[1]),
+                            "az": round(best[2]), "mag": round(magnitude, 1)})
+    planets.sort(key=lambda p: p["mag"])   # brightest first
+
+    req = urllib.request.Request(ISS_TLE, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        tle = r.read().decode().strip().splitlines()
+    iss = EarthSatellite(tle[1], tle[2], tle[0].strip(), ts)
+    window = ts.from_datetime(sunset), ts.from_datetime(sunset + datetime.timedelta(days=3))
+    times, events = iss.find_events(here, *window, altitude_degrees=10.0)
+    passes, current = [], {}
+    for t, event in zip(times, events):
+        alt, az, _ = (iss - here).at(t).altaz()
+        key = ("rise", "peak", "set")[event]
+        current[key], current[key + "_alt"], current[key + "_az"] = t, alt.degrees, az.degrees
+        if event == 2 and "rise" in current and "peak" in current:
+            peak = current["peak"]
+            evening = peak.utc_datetime().astimezone().hour not in range(SKY_SIGN_OFF_HOUR, 12)   # while on air
+            if evening and iss.at(peak).is_sunlit(eph) and dark(peak):
+                passes.append({"rise": current["rise"].utc_datetime().timestamp(),
+                               "rise_az": round(current["rise_az"]),
+                               "peak": peak.utc_datetime().timestamp(), "peak_alt": round(current["peak_alt"]),
+                               "set": t.utc_datetime().timestamp(), "set_az": round(az.degrees)})
+            current = {}
+
+    evening = ts.from_datetime(datetime.datetime.combine(day, datetime.time(21)).astimezone())
+    moon = {"phase": round(almanac.moon_phase(eph, evening).degrees, 1),
+            "lit": round(100 * almanac.fraction_illuminated(eph, "moon", evening))}
+    save(SKY_FILE, {"day": day.isoformat(), "from": (sunset - datetime.timedelta(minutes=30)).timestamp(),
+                    "until": end.timestamp(), "sunset": sunset.timestamp(), "moon": moon, "planets": planets,
+                    "iss": passes[:3]})
+    logger.info(f"Sky for {day}: sunset {sunset.astimezone():%H:%M}, moon {moon['phase']}° {moon['lit']}% lit, "
+                f"planets {[p['name'] for p in planets]}, {len(passes)} visible ISS passes in 3 days")
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     failed = False
-    for step in (quip_headlines, riff_shows):
+    for step in (quip_headlines, riff_shows, sky_tonight):
         try:
             step()
         except Exception:   # one step failing doesn't keep the other from running

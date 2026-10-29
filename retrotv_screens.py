@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -32,6 +33,7 @@ QUIZ_BACKGROUND = "0x1c0a36"
 QUIZ_BAND = "&H00481A30&"
 GREEN = "&H0040C050&"
 FLORIDA_LOCATIONS = (12, 27)  # Cape Canaveral SFS, Kennedy Space Center
+SKY_FILE = os.path.join(DATA_DIR, "sky.json")   # tonight's sky over the house, worked out by retrotv_news.py
 
 
 def fetch_json(name, url, max_age_minutes, stale_hours=24):
@@ -583,6 +585,101 @@ def launch_watch(now, season=None):
         place = ("★ " if l["florida"] else "") + clip_text(l["place"], 24)
         s.text(a, d, 944, y, place, BARLOW_S, fit(place, BARLOW_S, 28, 250), color, align=6, fade=fade, layer=3)
     return Card(lavfi_url(s.write("launch"), d, music("space_bed.ogg"), background=SPACE_BACKGROUND), d, "launch")
+
+
+# --- Tonight's Sky ---
+
+COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+MOON_PHASES = ((22.5, "New moon"), (67.5, "Waxing crescent"), (112.5, "First quarter"), (157.5, "Waxing gibbous"),
+               (202.5, "Full moon"), (247.5, "Waning gibbous"), (292.5, "Last quarter"), (337.5, "Waning crescent"),
+               (360.1, "New moon"))
+MOON_LIT, MOON_DARK = "&H00C8E6F0&", "&H00402C26&"
+
+
+def _compass(azimuth):
+    return COMPASS[int((azimuth % 360 + 22.5) // 45) % 8]
+
+
+def _height(altitude):
+    return "low" if altitude < 20 else "mid-sky" if altitude < 50 else "high" if altitude < 75 else "overhead"
+
+
+def _moon(phase, r):
+    """ASS drawings of the moon at a phase angle (0 new, 180 full; waxing lit on the right), as
+    [(path, dx, dy, colour)]: each path starts at 0,0 and goes at the disc's top-left plus dx, dy."""
+    disc = [(r * (1 + math.cos(math.radians(a))), r * (1 + math.sin(math.radians(a)))) for a in range(0, 360, 6)]
+    k = math.cos(math.radians(phase))
+    rows = [r * (2 * i / 40 - 1) for i in range(41)]
+    side = 1 if phase < 180 else -1
+    limb = [(side * (r * r - y * y) ** 0.5, y) for y in rows]
+    terminator = [(side * k * (r * r - y * y) ** 0.5, y) for y in reversed(rows)]
+    lit = [(r + x, r + y) for x, y in limb + terminator]
+    out = []
+    for points, colour in ((disc, MOON_DARK), (lit, MOON_LIT)):
+        x0, y0 = min(x for x, _ in points), min(y for _, y in points)
+        path = "m " + " l ".join(f"{x - x0:.1f} {y - y0:.1f}" for x, y in points)
+        out.append((path, x0, y0, colour))
+    return out
+
+
+def tonight_sky(now, season=None):
+    """The moon, the planets out tonight and the next ISS pass you can see, from SKY_FILE; None outside the
+    evening it was worked out for."""
+    try:
+        with open(SKY_FILE) as f:
+            sky = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not sky.get("from", 0) <= now.timestamp() <= sky.get("until", 0):
+        return None
+    at = datetime.datetime.fromtimestamp
+    d = 24.0
+    s = Script()
+    starfield(s, d, seed=int(now.timestamp()) // 3600, top=168)
+    info_header(s, d, [(0, d, "Tonight's Sky")], now, band="&H00301408&", season=season)
+    fade = (300, 400)
+
+    moon = sky["moon"]
+    r, cx, cy = 74, 200, 300
+    for path, dx, dy, colour in _moon(moon["phase"], r):
+        s.shape(0.3, d, cx - r + dx, cy - r + dy, path, colour, fade=fade, layer=3)
+    name = next(n for limit, n in MOON_PHASES if moon["phase"] < limit)
+    s.text(0.4, d, cx, 412, name.upper(), BARLOW_X, 34, YELLOW, fade=fade, layer=3)
+    s.text(0.5, d, cx, 450, f"{moon['lit']}% LIT", BARLOW_S, 30, SKY, spacing=2, fade=fade, layer=3)
+    s.text(0.6, d, cx, 510, f"SUNSET {clock(at(sky['sunset']))}", BARLOW_X, 30, MUSTARD, spacing=3, fade=fade,
+           layer=3)
+
+    x = 420
+    s.text(0.5, d, x, 206, "PLANETS OUT TONIGHT", BARLOW_X, 30, MUSTARD, align=4, spacing=5, fade=fade, layer=3)
+    planets = sky["planets"][:3]
+    for i, p in enumerate(planets):
+        y, a = 254 + i * 50, 0.7 + i * 0.2
+        s.text(a, d, x, y, p["name"].upper(), ARCHIVO, 34, WHITE, align=4, shadow=3, shadow_color=BLACK,
+               fade=fade, layer=3)
+        s.text(a, d, 640, y, clock(at(p["time"])), BARLOW_X, 32, YELLOW, align=4, fade=fade, layer=3)
+        where = f"{_height(p['alt'])} in the {_compass(p['az'])}".upper()
+        s.text(a, d, 944, y, where, BARLOW_B, fit(where, BARLOW_B, 32, 180), SKY, align=6, fade=fade, layer=3)
+    if not planets:
+        s.text(0.7, d, x, 254, "NONE UP AFTER DARK TONIGHT", BARLOW_B, 32, SKY, align=4, fade=fade, layer=3)
+
+    s.shape(0.9, d, x, 412, rect(944 - x, 3), MUSTARD, fade=fade, layer=3)
+    s.text(1.0, d, x, 444, "SPACE STATION", BARLOW_X, 30, MUSTARD, align=4, spacing=5, fade=fade, layer=3)
+    passes = [p for p in sky["iss"] if p["peak"] > now.timestamp()]
+    if passes:
+        p = passes[0]
+        when = at(p["rise"])
+        day = "TONIGHT" if when < at(sky["until"]) else when.strftime("%a").upper()
+        s.text(1.1, d, x, 490, f"{day} {clock(when)}", ARCHIVO, 36, YELLOW, align=4, shadow=3,
+               shadow_color=BLACK, fade=fade, layer=3)
+        path = f"{_compass(p['rise_az'])} TO {_compass(p['set_az'])} · {round(p['peak_alt'])}° UP"
+        s.text(1.2, d, 944, 490, path, BARLOW_B, 32, SKY, align=6, fade=fade, layer=3)
+        s.text(1.3, d, x, 534, f"ABOUT {max(1, round((p['set'] - p['rise']) / 60))} MINUTES, LOOK "
+               f"{_compass(p['rise_az'])} FIRST", BARLOW_S, 28, CREAM, align=4, spacing=1, fade=fade, layer=3)
+    else:
+        s.text(1.1, d, x, 490, "NO EVENING PASSES YOU CAN SEE", BARLOW_B, 32, SKY, align=4, fade=fade, layer=3)
+        s.text(1.2, d, x, 534, "IN THE NEXT 3 DAYS", BARLOW_S, 28, CREAM, align=4, spacing=1, fade=fade, layer=3)
+    return Card(lavfi_url(s.write("sky"), d, music("space_bed.ogg"), background=SPACE_BACKGROUND, loop=True), d,
+                "sky")
 
 
 # --- Markets ---
