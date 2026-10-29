@@ -1455,6 +1455,7 @@ class CacheManager:
         ARCHIVE_CHECK_MINUTES, in case archive.org was down)."""
         while True:
             self.archive_wake.clear()
+            self._archive_prune()
             for kind, want in ARCHIVE_READY.items():
                 try:
                     while self._archive_ready(kind) < want and self._archive_one(kind):
@@ -1463,18 +1464,33 @@ class CacheManager:
                     logger.warning(f"archive.org: no {kind} right now ({e})")
             self.archive_wake.wait(timeout=ARCHIVE_CHECK_MINUTES * 60)
 
+    def _archive_prune(self):
+        """Deletes downloads whose holiday has gone by without them airing, so they don't hold a place for a year."""
+        season = holiday_ahead(datetime.date.today())
+        with self.lock:
+            stale = [src for src, e in self.entries.items() if e.get("archive") and src not in self.reserved
+                     and holiday_tag(src) not in (None, season)]
+            for src in stale:
+                self._remove_file(self.entries.pop(src))
+                logger.info(f"Out of season, deleted: {os.path.basename(src)}")
+        if stale:
+            self._save_manifest()
+
     def _archive_one(self, kind):
         """Downloads one file of a kind from archive.org into the cache. False when none could be had, or it
-        wouldn't fit."""
+        wouldn't fit. A holiday's files are only fetched in (or just ahead of) its season."""
         got = archive.pick(kind)
         if not got:
             return False
+        src = os.path.join(ARCHIVE_ROOT, *got["path"].split("/"))
+        tag = holiday_tag(src)
+        if tag and tag != holiday_ahead(datetime.date.today()):
+            return True   # passed over: try another
         with self.lock:
             used = sum(e["size"] for e in self.entries.values() if e.get("archive"))
         if (used + got["size"] > ARCHIVE_POOL_GB * GB
                 or shutil.disk_usage(CACHE_DIR).free - got["size"] < MIN_FREE_GB * GB):
             return False
-        src = os.path.join(ARCHIVE_ROOT, *got["path"].split("/"))
         name = self._file_name(src)
         part = os.path.join(CACHE_DIR, name + ".part")
         try:
