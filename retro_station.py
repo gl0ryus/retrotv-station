@@ -140,6 +140,7 @@ SPECIALS = {
     "reminder": 120, # a heads-up before Valentine's, Mother's and Father's Day (see REMINDERS)
     "blurb": 30,     # text bumps: facts, food for thought, dad jokes, raunchier late at night (retrotv_blurbs)
     "sky": 120,      # Tonight's Sky: the moon, planets and ISS passes over the house, sunset to sign-off
+    "teletext": 150, # G|TV Text: teletext pages of tonight's listings, the weather, markets and odd news
 }
 # How far the text bumps go: clean until BLURB_CHEEKY_HOUR, cheeky until BLURB_RAUNCHY_HOUR, raunchy to sign-off
 # (crude, never hateful). Always clean in the kids' dayparts
@@ -2858,6 +2859,11 @@ class Station:
             return screens.markets(airs_at, season)
         if kind == "sky":
             return screens.tonight_sky(airs_at, season)
+        if kind == "teletext":
+            data = (cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ) if WEATHER_LAT is not None
+                    else None)
+            return screens.teletext(airs_at, data, WEATHER_PLACE, self.guide_rows(first_start), blurbs.headlines(),
+                                    season)
         if kind == "reminder":
             upcoming = next_reminder(airs_at.date())
             return events.reminder(*upcoming, airs_at, season) if upcoming else None

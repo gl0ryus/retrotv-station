@@ -103,13 +103,26 @@ def _late_joke(level, seen):
     return f"joke-{j['id']}", ([_tidy(j["joke"])] if j["type"] == "single" else [_tidy(j["setup"]), _tidy(j["delivery"])])
 
 
-def _news(level, seen):
-    """A headline from NEWS_FILE that hasn't aired, with its quip for this level as the following beats."""
+def _news_items():
+    """The headlines in NEWS_FILE from the last NEWS_MAX_AGE_HOURS, newest first."""
     with open(NEWS_FILE) as f:
         items = json.load(f)["items"]
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=NEWS_MAX_AGE_HOURS)
-    fresh = [i for i in items if i["key"] not in seen and i["quips"].get(level)
-             and datetime.datetime.fromisoformat(i["published"]) > cutoff]
+    items = [i for i in items if datetime.datetime.fromisoformat(i["published"]) > cutoff]
+    return sorted(items, key=lambda i: i["published"], reverse=True)
+
+
+def headlines():
+    """The recent odd-news headlines, newest first, for other screens (G|TV Text); [] when there are none."""
+    try:
+        return [i["headline"] for i in _news_items()]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def _news(level, seen):
+    """A headline from NEWS_FILE that hasn't aired, with its quip for this level as the following beats."""
+    fresh = [i for i in _news_items() if i["key"] not in seen and i["quips"].get(level)]
     if not fresh:
         raise ValueError("nothing new")
     item = random.choice(fresh)

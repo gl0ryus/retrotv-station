@@ -19,7 +19,7 @@ import urllib.request
 
 from retrotv_cards import (
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, SHADOW_RED, SKY, W, WHITE,
-    YELLOW, ASSETS_DIR, CHANNEL, Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look,
+    YELLOW, ASSETS_DIR, CHANNEL, WMO, Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look,
     music, rect, text_width,
 )
 
@@ -777,6 +777,192 @@ def markets(now, season=None):
     s.text(0.8, d, 512, 566, sources.upper(), BARLOW_B, 28, "&H00B0B8B0&", spacing=1, fade=fade, layer=3)
     return Card(lavfi_url(s.write("markets"), d, music("weather_bed.ogg"), background=MARKET_BACKGROUND, loop=True),
                 d, "markets")
+
+
+# --- Teletext ---
+
+# A 40x25 teletext page in Bedstead (the SAA5050 character set, CC0): its glyphs are 0.602 em wide and 1 em
+# tall, so 22 px cells take a 166% horizontal stretch. The grid sits inside the tube's curve
+TT_FONT, TT_COLS, TT_ROWS, TT_CELL = "Bedstead", 40, 25, 22
+TT_X, TT_Y = (W - TT_COLS * TT_CELL) // 2, (H - TT_ROWS * TT_CELL) // 2
+TT_STRETCH = round(100 * TT_CELL / (0.602 * TT_CELL))
+TT_PAGE_SECONDS = 6.5
+TT_BAR = "│"   # Bedstead's "|" looks like an I; the box-drawing bar keeps G|TV reading right
+# The teletext palette, as ASS colours; red lifted a little, as pure red goes dark through the CRT chain
+TT = {"red": "&H004848FF&", "green": "&H0000FF00&", "yellow": "&H0000FFFF&", "blue": "&H00FF0000&",
+      "magenta": "&H00FF00FF&", "cyan": "&H00FFFF00&", "white": "&H00FFFFFF&", "black": "&H00000000&"}
+
+
+class TeletextPage:
+    """One page: text at grid cells, each run in a foreground and an optional background colour. Double
+    height runs take their row and the one under it."""
+    def __init__(self, number, title, band):
+        self.number, self.runs = number, []
+        self.band(1, band, double=True)
+        self.put(1, 1, title, "white" if band in ("blue", "red", "magenta") else "black", double=True)
+        self.put(1, 39 - len(f"P{number}"), f"P{number}", "white" if band in ("blue", "red", "magenta")
+                 else "black", double=True)
+
+    def put(self, row, col, text, fg="white", bg=None, double=False):
+        text = text[:TT_COLS - col]
+        if text:
+            self.runs.append((row, col, text, fg, bg, double))
+
+    def band(self, row, colour, double=False):
+        self.put(row, 0, " " * TT_COLS, colour, colour, double)
+
+    def draw(self, s, start, end):
+        for row, col, text, fg, bg, double in self.runs:
+            x, y = TT_X + col * TT_CELL, TT_Y + row * TT_CELL
+            if bg:
+                s.shape(start, end, x, y, rect(len(text) * TT_CELL, TT_CELL * (2 if double else 1)), TT[bg],
+                        fade=None, layer=1)
+            if text.strip():
+                _tt_text(s, start, end, row, col, text, fg, double)
+
+
+def _tt_text(s, start, end, row, col, text, fg, double=False):
+    extra = f"\\fscx{TT_STRETCH}" + ("\\fscy200" if double else "")
+    s.text(start, end, TT_X + col * TT_CELL, TT_Y + row * TT_CELL, text.replace("|", TT_BAR), TT_FONT, TT_CELL,
+           TT[fg], align=7, fade=None, layer=2, extra=extra)
+
+
+def _tt_wrap(text, width):
+    lines, line = [], ""
+    for word in text.split():
+        if line and len(line) + 1 + len(word) > width:
+            lines.append(line)
+            line = word
+        else:
+            line = f"{line} {word}".strip()
+    return lines + ([line] if line else [])
+
+
+def _tt_index(place):
+    page = TeletextPage(100, "G|TV TEXT", "blue")
+    page.put(4, 1, f"{place or 'Your'}'s own teletext service"[:38], "cyan")
+    for i, (name, number, colour) in enumerate((("TONIGHT ON G|TV", 401, "red"), ("WEATHER", 302, "blue"),
+                                                ("MARKETS", 220, "green"), ("ODD NEWS", 555, "magenta"))):
+        row = 7 + i * 2
+        page.put(row, 2, " ", colour, colour)
+        page.put(row, 4, name.ljust(31, "."), "white")
+        page.put(row, 35, str(number), "yellow")
+    for i, colour in enumerate(("yellow", "cyan", "green", "magenta", "red", "blue")):
+        page.put(17, 2 + i * 6, " " * 6, colour, colour, double=True)
+    return page
+
+
+def _tt_tonight(listings):
+    page = TeletextPage(401, "TONIGHT ON G|TV", "red")
+    row = 4
+    for when, name, episode in listings:
+        if row > 21:
+            break
+        lines = _tt_wrap(name, 30)
+        page.put(row, 1, clock(when).rjust(8), "yellow")
+        for line in lines[:2]:
+            page.put(row, 10, line, "white")
+            row += 1
+        if episode and row <= 22:
+            page.put(row, 10, clip_text(episode, 29), "cyan")
+            row += 1
+        row += 1
+    if row == 4:
+        page.put(4, 1, "Listings are not available", "white")
+    return page
+
+
+def _tt_weather(data, place, now):
+    page = TeletextPage(302, "WEATHER", "blue")
+    try:
+        cur, daily = data["current"], data["daily"]
+        today = daily["time"].index(now.date().isoformat())
+    except (TypeError, KeyError, ValueError):
+        page.put(5, 1, "Weather is not available", "white")
+        return page
+    page.put(4, 1, (place or "").upper(), "cyan")
+    page.put(6, 1, "NOW", "yellow")
+    page.put(6, 6, f"{round(cur['temperature_2m'])}F", "white", double=True)
+    page.put(6, 12, WMO.get(cur["weather_code"], ("",))[0].upper(), "white", double=True)
+    page.put(9, 1, f"HUMIDITY {round(cur['relative_humidity_2m'])}%   WIND {round(cur['wind_speed_10m'])} MPH",
+             "cyan")
+    page.put(11, 1, "DAY   HIGH  LOW  RAIN", "yellow")
+    for i in range(today, min(today + 5, len(daily["time"]))):
+        row = 13 + (i - today) * 2
+        day = datetime.date.fromisoformat(daily["time"][i])
+        page.put(row, 1, "TODAY" if i == today else day.strftime("%a").upper(), "white")
+        page.put(row, 7, f"{round(daily['temperature_2m_max'][i]):>3}", "red")
+        page.put(row, 12, f"{round(daily['temperature_2m_min'][i]):>3}", "cyan")
+        page.put(row, 17, f"{daily['precipitation_probability_max'][i] or 0:>3}%", "green")
+        page.put(row, 23, WMO.get(daily["weather_code"][i], ("",))[0].upper()[:17], "white")
+    return page
+
+
+def _tt_markets():
+    page = TeletextPage(220, "MARKETS", "green")
+    rows = (("BTC", "BITCOIN", _crypto("bitcoin"), "${:,.0f}"), ("ETH", "ETHEREUM", _crypto("ethereum"), "${:,.0f}"),
+            ("S&P", "S&P 500", _spx(), "{:,.0f}"))
+    page.put(4, 1, "24 HOUR CHANGE (S&P SINCE LAST CLOSE)", "cyan")
+    row = 7
+    for symbol, name, quote, fmt in rows:
+        if not quote:
+            continue
+        price, change = quote[0], quote[1]
+        page.put(row, 1, symbol, "yellow", double=True)
+        page.put(row, 8, fmt.format(price).rjust(10), "white", double=True)
+        page.put(row, 24, f"{'+' if change >= 0 else '-'}{abs(change):.2f}%", "green" if change >= 0 else "red",
+                 double=True)
+        page.put(row + 2, 1, name, "cyan")
+        row += 5
+    if row == 7:
+        page.put(7, 1, "Prices are not available", "white")
+    return page
+
+
+def _tt_news(headlines):
+    page = TeletextPage(555, "ODD NEWS", "magenta")
+    row = 4
+    for i, headline in enumerate(headlines):
+        lines = _tt_wrap(headline, 38)
+        if row + len(lines) > 22:
+            break
+        for line in lines:
+            page.put(row, 1, line, "white" if i % 2 == 0 else "cyan")
+            row += 1
+        row += 1
+    if row == 4:
+        page.put(4, 1, "No odd news right now", "white")
+    return page
+
+
+def teletext(now, weather, place, listings, headlines, season=None):
+    """G|TV Text: a teletext service flipping through its pages (index, tonight's listings, weather, markets
+    and the odd news headlines), each with the rolling page header and a ticking clock."""
+    pages = [_tt_index(place), _tt_tonight(listings), _tt_weather(weather, place, now), _tt_markets(),
+             _tt_news(headlines)]
+    d = round(len(pages) * TT_PAGE_SECONDS, 2)
+    s = Script()
+    for i, page in enumerate(pages):
+        start, end = i * TT_PAGE_SECONDS, (i + 1) * TT_PAGE_SECONDS
+        page.draw(s, start, end)
+        # The header: while the set looks for the page its number rolls, then it holds; the clock ticks
+        rolling = [page.number - 30 + 7 * k for k in range(4)] + [page.number]
+        for k, number in enumerate(rolling):
+            a = start + k * 0.15
+            b = end if number == page.number else start + (k + 1) * 0.15
+            _tt_text(s, a, b, 0, 1, f"P{page.number}  G|TV TEXT {number}", "white")
+        for sec in range(int(start), int(end) + 1):
+            t = now + datetime.timedelta(seconds=sec)
+            a, b = max(start, sec), min(end, sec + 1)
+            if b > a:
+                stamp = f"{t:%a %d %b} {t:%H:%M/%S}"
+                _tt_text(s, a, b, 0, TT_COLS - len(stamp), stamp, "yellow")
+        col = 1
+        for label, colour in (("TV", "red"), ("Weather", "green"), ("Markets", "yellow"), ("News", "cyan")):
+            _tt_text(s, start, end, 24, col, label, colour)
+            col += len(label) + 3
+    return Card(lavfi_url(s.write("teletext"), d, music("weather_bed.ogg"), background="0x000000", loop=True), d,
+                "teletext")
 
 
 # --- Who's in Space ---
