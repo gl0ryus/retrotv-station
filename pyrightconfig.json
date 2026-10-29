@@ -1,0 +1,9 @@
+{
+  "include": ["."],
+  "exclude": ["backups", "legacy", "**/__pycache__"],
+  "pythonVersion": "3.13",
+  "pythonPlatform": "Linux",
+  "typeCheckingMode": "basic",
+  "reportMissingImports": "warning",
+  "reportMissingModuleSource": "none"
+}
