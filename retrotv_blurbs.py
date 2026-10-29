@@ -7,8 +7,8 @@ BLURB_RAUNCHY_HOUR): by day clean facts ("did you know?", "ain't that interestin
 jokes; cheekier from 9 PM; raunchy from 11 PM to sign-off, crude but never racist, sexist, religious or
 political; cursing and vulgar are fine from 9 PM. Facts come from uselessfacts.jsph.pl, dad jokes from
 icanhazdadjoke.com, the late-night jokes from JokeAPI (its own flags keep the hateful ones out), and our lines
-from retrotv_blurbs.txt. From 9 PM, real odd-news headlines air with a quip at the hour's level, both from
-NEWS_FILE, which retrotv_news.py keeps up to date on its own timer. Now and then a bump ends on a reaction ("damn, that's
+from retrotv_blurbs.txt. From 9 PM, real odd-news headlines air with a quip at the hour's level (NEWS_FILE),
+and bumps in a show's breaks riff on that show (SHOW_RIFFS_FILE); retrotv_news.py writes both on its own timer. Now and then a bump ends on a reaction ("damn, that's
 crazy.", "ok but who asked?"), and facts and headlines open with a kicker; both come from
 retrotv_blurbs_extras.txt. Nothing airs again until SEEN_KEEP others have.
 """
@@ -33,6 +33,7 @@ SEEN_FILE = os.path.join(DATA_DIR, "blurbs.json")   # what has aired lately, so 
 SEEN_KEEP = 1500
 NEWS_FILE = os.path.join(DATA_DIR, "news_quips.json")   # headlines and their quips, written by retrotv_news.py
 NEWS_MAX_AGE_HOURS = 48  # older headlines aren't news any more: they don't air, and don't get quips written
+SHOW_RIFFS_FILE = os.path.join(DATA_DIR, "show_riffs.json")   # riffs on the shows, by name, from retrotv_news.py
 LEVELS = ("clean", "cheeky", "raunchy")
 BEDS = ("blurb_lofi1.ogg", "blurb_lofi2.ogg", "blurb_vapor1.ogg", "blurb_vapor2.ogg")
 MAX_CHARS = 220          # anything longer doesn't read as a bump
@@ -43,14 +44,17 @@ GREY = "&H00A8A8A8&"     # the kicker, a step behind the words
 MIX = {
     "clean": ((None, "fact", 4), ("dad joke", "dad", 3), (None, "ours", 4)),
     "cheeky": ((None, "fact", 2), ("dad joke", "dad", 2), ("after hours", "joke", 3), (None, "news", 3),
-               (None, "ours", 5)),
-    "raunchy": ((None, "fact", 1), ("after hours", "joke", 5), (None, "news", 3), (None, "ours", 6)),
+               (None, "show", 4), (None, "ours", 5)),
+    "raunchy": ((None, "fact", 1), ("after hours", "joke", 5), (None, "news", 3), (None, "show", 4),
+                (None, "ours", 6)),
 }
-# The EXTRAS_FILE section a source's kicker comes from, and what it says if that section has none for the level
-KICKERS = {"fact": ("fact kickers", "did you know?"), "news": ("news kickers", "actual headline")}
+# The EXTRAS_FILE section a source's kicker comes from, and what it says if that section has none for the level.
+# A show's kicker names it where it says {show}
+KICKERS = {"fact": ("fact kickers", "did you know?"), "news": ("news kickers", "actual headline"),
+           "show": ("show kickers", "a word about {show}")}
 # How often a bump from each source gets a reaction from EXTRAS_FILE as its last beat ("ok but who asked?").
-# Never after a headline: its quip is the reaction
-REACTION_CHANCE = {"fact": 0.6, "dad": 0.4, "joke": 0.4, "news": 0.0, "ours": 0.2}
+# Never after a headline or a riff: the quip is the reaction
+REACTION_CHANCE = {"fact": 0.6, "dad": 0.4, "joke": 0.4, "news": 0.0, "show": 0.0, "ours": 0.2}
 NEVER = "racist,sexist,religious,political"   # JokeAPI flags kept off the air at any hour
 # Words that keep a fact or joke from the APIs off the air at the clean level (the day, and the kids' hours)
 NOT_CLEAN = re.compile(r"\b(?:sex\w*|naked|nude|penis\w*|vagina\w*|breasts?|boobs?|condoms?|orgasm\w*|porn\w*|"
@@ -161,16 +165,42 @@ def _from_ours(level, seen):
     return (got[0], got[2], got[3]) if got else None
 
 
-def _pick(level, seen):
+def riff_key(show, riff):
+    """What a riff on a show is remembered by once it has aired (retrotv_news.py checks these too)."""
+    return "show-" + hashlib.sha1(f"{show}|{riff}".encode()).hexdigest()[:12]
+
+
+def _from_show(level, seen, show):
+    """(kicker, beats, key) for a riff on the show (by name) from SHOW_RIFFS_FILE, the kicker naming it; None
+    with no show on, or no riff at this level that hasn't aired lately."""
+    if not show:
+        return None
+    try:
+        with open(SHOW_RIFFS_FILE) as f:
+            entry = json.load(f)["shows"].get(show)
+    except (OSError, ValueError, KeyError, AttributeError):
+        return None
+    fresh = [r for r in (entry or {}).get(level, []) if riff_key(show, r) not in seen]
+    if not fresh:
+        return None
+    riff = random.choice(fresh)
+    section, default = KICKERS["show"]
+    kicker = " ".join(_extra(section, level) or [default]).replace("{show}", entry.get("title") or show)
+    return kicker, riff.split(" / "), riff_key(show, riff)
+
+
+def _pick(level, seen, show=None):
     """(kicker, beats, key, source) for a bump at this level, nothing in `seen` if it can be helped; None if
-    nothing turns up. A source that's down isn't asked again this time; our lines are the last resort."""
+    nothing turns up. show: the name of the show this break is in, for a riff on it. A source that's down or
+    out of material isn't asked again this time; our lines are the last resort."""
     options = list(MIX[level])
     for _ in range(6):
         kicker, source, _ = random.choices(options, weights=[w for _, _, w in options])[0]
-        if source == "ours":
-            got = _from_ours(level, seen)
+        if source in ("ours", "show"):
+            got = _from_show(level, seen, show) if source == "show" else _from_ours(level, seen)
             if got:
                 return (*got, source)
+            options = [o for o in options if o[1] != source] or options
             continue
         try:
             key, beats = SOURCES[source](level, seen)
@@ -215,10 +245,11 @@ def _beat(s, start, text, color, size):
     return start + seconds + 0.35
 
 
-def blurb(level="clean"):
-    """A text bump for the level ("clean", "cheeky" or "raunchy"), or None when nothing could be found."""
+def blurb(level="clean", show=None):
+    """A text bump for the level ("clean", "cheeky" or "raunchy"), or None when nothing could be found. show:
+    the name of the show on, which the bump may riff on."""
     seen = _seen()
-    picked = _pick(level if level in MIX else "clean", set(seen))
+    picked = _pick(level if level in MIX else "clean", set(seen), show)
     if not picked:
         return None
     kicker, beats, key, source = picked

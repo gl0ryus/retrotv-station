@@ -3,6 +3,7 @@
 #   [reactions | level]     a closing beat, said back at a fact or joke now and then ("ok but who asked?")
 #   [fact kickers | level]  what a fact from the API opens with ("did you know?")
 #   [news kickers | level]  what a real headline opens with, before its quip ("actual headline")
+#   [show kickers | level]  what a riff on the show that's on opens with; {show} is its name ("re: {show}")
 #
 # Levels as in retrotv_blurbs.txt: clean any time (the kids' hours too), cheeky from 9 PM, raunchy from 11 PM.
 # Cursing and vulgar are fine at cheeky and raunchy; hateful never.
@@ -88,3 +89,15 @@ the news, sort of
 real fucking headline
 we're not making this shit up
 late news, because why not
+
+[show kickers | cheeky]
+a word about {show}
+re: {show}
+thoughts on {show}
+quick note on {show}
+
+[show kickers | raunchy]
+real talk about {show}
+{show}, honestly
+re: {show}
+a few words on {show}

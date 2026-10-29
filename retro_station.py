@@ -2859,7 +2859,8 @@ class Station:
             upcoming = next_reminder(airs_at.date())
             return events.reminder(*upcoming, airs_at, season) if upcoming else None
         if kind == "blurb":
-            return blurbs.blurb(blurb_level(airs_at))
+            show = self.current_show   # the show this break is in, which the bump may riff on
+            return blurbs.blurb(blurb_level(airs_at), show.name if isinstance(show, Show) else None)
         return None
 
     def guide_rows(self, first_start):
