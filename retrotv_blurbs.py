@@ -7,10 +7,12 @@ BLURB_RAUNCHY_HOUR): by day clean facts ("did you know?", "ain't that interestin
 jokes; cheekier from 9 PM; raunchy from 11 PM to sign-off, crude but never racist, sexist, religious or
 political; cursing and vulgar are fine from 9 PM. Facts come from uselessfacts.jsph.pl, dad jokes from
 icanhazdadjoke.com, the late-night jokes from JokeAPI (its own flags keep the hateful ones out), and our lines
-from retrotv_blurbs.txt. Now and then a bump ends on a reaction ("damn, that's crazy.", "ok but who asked?"),
-and facts open with a kicker; both come from retrotv_blurbs_extras.txt. Nothing airs again until SEEN_KEEP
-others have.
+from retrotv_blurbs.txt. From 9 PM, real odd-news headlines air with a quip at the hour's level, both from
+NEWS_FILE, which retrotv_news.py keeps up to date on its own timer. Now and then a bump ends on a reaction ("damn, that's
+crazy.", "ok but who asked?"), and facts and headlines open with a kicker; both come from
+retrotv_blurbs_extras.txt. Nothing airs again until SEEN_KEEP others have.
 """
+import datetime
 import hashlib
 import json
 import logging
@@ -29,20 +31,26 @@ LINES_FILE = os.path.join(HERE, "retrotv_blurbs.txt")           # the bumps we w
 EXTRAS_FILE = os.path.join(HERE, "retrotv_blurbs_extras.txt")   # reactions, and what facts open with
 SEEN_FILE = os.path.join(DATA_DIR, "blurbs.json")   # what has aired lately, so nothing repeats soon
 SEEN_KEEP = 1500
+NEWS_FILE = os.path.join(DATA_DIR, "news_quips.json")   # headlines and their quips, written by retrotv_news.py
+NEWS_MAX_AGE_HOURS = 48  # older headlines aren't news any more: they don't air, and don't get quips written
 LEVELS = ("clean", "cheeky", "raunchy")
 BEDS = ("blurb_lofi1.ogg", "blurb_lofi2.ogg", "blurb_vapor1.ogg", "blurb_vapor2.ogg")
 MAX_CHARS = 220          # anything longer doesn't read as a bump
-TEXT_SIZE, KICKER_SIZE = 50, 40
+TEXT_SIZE, KICKER_SIZE, SIGN_SIZE = 55, 44, 37   # the words, the kicker above them, the g|tv at the end
 GREY = "&H00A8A8A8&"     # the kicker, a step behind the words
-# What can air at each level: (kicker, source, weight). "ours" is retrotv_blurbs.txt with its own kickers; a
-# fact's kicker (None) comes from the "fact kickers" in EXTRAS_FILE
+# What can air at each level: (kicker, source, weight). "ours" is retrotv_blurbs.txt with its own kickers; the
+# kicker of a fact or a headline (None) comes from EXTRAS_FILE, see KICKERS
 MIX = {
     "clean": ((None, "fact", 4), ("dad joke", "dad", 3), (None, "ours", 4)),
-    "cheeky": ((None, "fact", 2), ("dad joke", "dad", 2), ("after hours", "joke", 3), (None, "ours", 5)),
-    "raunchy": ((None, "fact", 1), ("after hours", "joke", 5), (None, "ours", 6)),
+    "cheeky": ((None, "fact", 2), ("dad joke", "dad", 2), ("after hours", "joke", 3), (None, "news", 3),
+               (None, "ours", 5)),
+    "raunchy": ((None, "fact", 1), ("after hours", "joke", 5), (None, "news", 3), (None, "ours", 6)),
 }
-# How often a bump from each source gets a reaction from EXTRAS_FILE as its last beat ("ok but who asked?")
-REACTION_CHANCE = {"fact": 0.6, "dad": 0.4, "joke": 0.4, "ours": 0.2}
+# The EXTRAS_FILE section a source's kicker comes from, and what it says if that section has none for the level
+KICKERS = {"fact": ("fact kickers", "did you know?"), "news": ("news kickers", "actual headline")}
+# How often a bump from each source gets a reaction from EXTRAS_FILE as its last beat ("ok but who asked?").
+# Never after a headline: its quip is the reaction
+REACTION_CHANCE = {"fact": 0.6, "dad": 0.4, "joke": 0.4, "news": 0.0, "ours": 0.2}
 NEVER = "racist,sexist,religious,political"   # JokeAPI flags kept off the air at any hour
 # Words that keep a fact or joke from the APIs off the air at the clean level (the day, and the kids' hours)
 NOT_CLEAN = re.compile(r"\b(?:sex\w*|naked|nude|penis\w*|vagina\w*|breasts?|boobs?|condoms?|orgasm\w*|porn\w*|"
@@ -91,7 +99,20 @@ def _late_joke(level, seen):
     return f"joke-{j['id']}", ([_tidy(j["joke"])] if j["type"] == "single" else [_tidy(j["setup"]), _tidy(j["delivery"])])
 
 
-SOURCES = {"fact": _fact, "dad": _dad_joke, "joke": _late_joke}
+def _news(level, seen):
+    """A headline from NEWS_FILE that hasn't aired, with its quip for this level as the following beats."""
+    with open(NEWS_FILE) as f:
+        items = json.load(f)["items"]
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=NEWS_MAX_AGE_HOURS)
+    fresh = [i for i in items if i["key"] not in seen and i["quips"].get(level)
+             and datetime.datetime.fromisoformat(i["published"]) > cutoff]
+    if not fresh:
+        raise ValueError("nothing new")
+    item = random.choice(fresh)
+    return item["key"], [item["headline"]] + item["quips"][level].split(" / ")
+
+
+SOURCES = {"fact": _fact, "dad": _dad_joke, "joke": _late_joke, "news": _news}
 
 
 def _sections(path):
@@ -159,8 +180,9 @@ def _pick(level, seen):
             continue
         text = " ".join(beats)
         if key not in seen and len(text) <= MAX_CHARS and not (level == "clean" and NOT_CLEAN.search(text)):
-            if source == "fact":
-                kicker = " ".join(_extra("fact kickers", level) or ["did you know?"])
+            if source in KICKERS:
+                section, default = KICKERS[source]
+                kicker = " ".join(_extra(section, level) or [default])
             return kicker, beats, key, source
     got = _from_ours(level, seen)
     return (*got, "ours") if got else None
@@ -215,7 +237,7 @@ def card(kicker, beats):
         t = _beat(s, t, kicker, GREY, KICKER_SIZE)
     for text in beats:
         t = _beat(s, t, text, WHITE, TEXT_SIZE)
-    s.text(t, t + 1.8, 512, 300, CHANNEL.lower(), BARLOW_S, 34, WHITE, spacing=2, fade=(120, 300))
+    s.text(t, t + 1.8, 512, 300, CHANNEL.lower(), BARLOW_S, SIGN_SIZE, WHITE, spacing=2, fade=(120, 300))
     d = round(t + 2.1, 2)
     beds = [b for b in BEDS if os.path.exists(music(b))]
     bed = music(random.choice(beds)) if beds else None

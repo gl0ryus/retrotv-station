@@ -1,7 +1,8 @@
-# Extra flavour for the text bumps (retrotv_blurbs.py). Same format as retrotv_blurbs.txt, two kinds of section:
+# Extra flavour for the text bumps (retrotv_blurbs.py). Same format as retrotv_blurbs.txt, three kinds of section:
 #
 #   [reactions | level]     a closing beat, said back at a fact or joke now and then ("ok but who asked?")
 #   [fact kickers | level]  what a fact from the API opens with ("did you know?")
+#   [news kickers | level]  what a real headline opens with, before its quip ("actual headline")
 #
 # Levels as in retrotv_blurbs.txt: clean any time (the kids' hours too), cheeky from 9 PM, raunchy from 11 PM.
 # Cursing and vulgar are fine at cheeky and raunchy; hateful never.
@@ -70,3 +71,20 @@ for no reason at all
 drunk fact
 fact you'll forget by morning
 shit you didn't need to know
+
+[news kickers | clean]
+actual headline
+real news
+this is a real headline
+in the news today
+meanwhile, in the news
+
+[news kickers | cheeky]
+real headline. we checked.
+this actually happened
+the news, sort of
+
+[news kickers | raunchy]
+real fucking headline
+we're not making this shit up
+late news, because why not
