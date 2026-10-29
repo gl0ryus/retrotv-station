@@ -779,6 +779,81 @@ def markets(now, season=None):
                 d, "markets")
 
 
+# --- Weekly Countdown ---
+
+LASTFM_KEY_FILE = os.path.join(HOME_DIR, ".config", "retrotv", "lastfm.key")   # on the SD card, never logged
+LASTFM_USER = "LOLDAN"
+LASTFM_API = "https://ws.audioscrobbler.com/2.0/?method={}&user={}&period=7day&limit={}&format=json&api_key={}"
+COUNTDOWN_SECONDS = 28.0   # retro_station plans music blocks that open with it around this
+
+
+def weekly_chart():
+    """[(rank, artist, plays, song)]: the top 10 artists of the last 7 days on Last.fm, each with its most
+    played song that week (or None); [] without the key or the data. Cached for 6 hours."""
+    try:
+        with open(LASTFM_KEY_FILE) as f:
+            key = f.read().strip()
+    except OSError:
+        return []
+    artists = fetch_json("lastfm-artists", LASTFM_API.format("user.gettopartists", LASTFM_USER, 10, key), 360)
+    tracks = fetch_json("lastfm-tracks", LASTFM_API.format("user.gettoptracks", LASTFM_USER, 200, key), 360)
+    try:
+        top = {}
+        for t in (tracks or {}).get("toptracks", {}).get("track", []):
+            top.setdefault(t["artist"]["name"].lower(), t["name"])   # most played first
+        return [(int(a["@attr"]["rank"]), a["name"], int(a["playcount"]), top.get(a["name"].lower()))
+                for a in artists["topartists"]["artist"][:10]]
+    except (TypeError, KeyError, ValueError):
+        return []
+
+
+def countdown(chart, up_first, now, season=None):
+    """The Weekly Countdown: the week's top artists counted down, 10 to 6 down the left and 5 to 2 down
+    the right, then number one in the banner with its song. up_first (rank, artist, song): the video that
+    opens the block after it, named in the banner at the end."""
+    d = COUNTDOWN_SECONDS
+    s = Script()
+    info_header(s, d, [(0, d, "Weekly Countdown")], now, band="&H00401028&", season=season)
+    fade = (250, 300)
+    s.text(0.3, d, 80, 206, "YOUR MOST PLAYED ARTISTS THIS WEEK", BARLOW_X, 28, MUSTARD, align=4, spacing=4,
+           fade=fade, layer=3)
+    s.text(0.3, d, 944, 206, "PLAYS", BARLOW_X, 28, MUSTARD, align=6, spacing=4, fade=fade, layer=3)
+    step = 1.5
+    for i, (rank, artist, plays, _) in enumerate(sorted((r for r in chart if r[0] > 1), reverse=True)):
+        a = 1.0 + i * step
+        x, row = (80, 10 - rank) if rank >= 6 else (532, 5 - rank)
+        y = 256 + row * 48
+        s.text(a, d, x, y, f"{rank}", ARCHIVO, 30, YELLOW, align=4, shadow=2, shadow_color=BLACK, fade=fade,
+               layer=3)
+        s.text(a, d, x + 58, y, artist.upper(), BARLOW_X, fit(artist.upper(), BARLOW_X, 32, 290), WHITE, align=4,
+               fade=fade, layer=3)
+        s.text(a, d, x + 412, y, str(plays), BARLOW_B, 30, SKY, align=6, fade=fade, layer=3)
+    top = next((r for r in chart if r[0] == 1), None)
+    reveal = 1.0 + 9 * step + 0.8
+    if top:
+        s.shape(reveal, d, 80, 494, rect(864, 80), MUSTARD, fade=fade, layer=2)
+        _, artist, plays, song = top
+        until = d - 6.5 if up_first else d
+        s.text(reveal, until, 104, 534, "#1", ARCHIVO, 48, "&H00200A14&", align=4, fade=fade, layer=3)
+        s.text(reveal + 0.3, until, 196, 520, artist.upper(), ARCHIVO, fit(artist.upper(), ARCHIVO, 40, 560),
+               "&H00200A14&", align=4, fade=fade, layer=3)
+        detail = (f"{song} · " if song else "") + f"{plays} plays"
+        s.text(reveal + 0.6, until, 196, 556, clip_text(detail, 52), BARLOW_B, 30, "&H00200A14&", align=4,
+               fade=fade, layer=3)
+    if up_first:
+        rank, artist, song = up_first
+        a = d - 6.5 if top else reveal
+        if not top:
+            s.shape(a, d, 80, 494, rect(864, 80), MUSTARD, fade=fade, layer=2)
+        s.text(a, d, 104, 520, f"UP FIRST · NUMBER {rank}", BARLOW_X, 30, "&H00200A14&", align=4, spacing=4,
+               fade=fade, layer=3)
+        line = f"{artist} · {song}".upper()
+        s.text(a + 0.2, d, 104, 556, line, ARCHIVO, fit(line, ARCHIVO, 32, 820), "&H00200A14&", align=4,
+               fade=fade, layer=3)
+    return Card(lavfi_url(s.write("countdown"), d, music("lotto_bed.ogg"), background="0x10061c", loop=True), d,
+                "countdown")
+
+
 # --- Teletext ---
 
 # A 40x25 teletext page in Bedstead (the SAA5050 character set, CC0): its glyphs are 0.602 em wide and 1 em

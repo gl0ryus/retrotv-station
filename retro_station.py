@@ -291,6 +291,9 @@ MUSIC_VIDEO_SECONDS = (90, 480)   # videos outside this length stay out of the b
 MUSIC_TITLE_AT = 4.0              # seconds into each video for its lower third
 MUSIC_TITLE_SECONDS = 4.5         # per panel: NOW · ARTIST, then YEAR · SONG
 MUSIC_MIN_FILL = 0.8              # a block airs only if its cached videos fill this much of it
+# These blocks open with the Weekly Countdown (Last.fm, screens.countdown), then the video of the best placed
+# artist in it that's cached
+COUNTDOWN_BLOCKS = ("After School Videos", "Saturday Night Videos")
 
 # Effects
 GLITCH_MINUTES = (40, 80)  # a 1-second tracking roll or interference burst about this often (None = off)
@@ -452,6 +455,11 @@ def music_credit(src):
     if m:
         return m.group(2).strip(), m.group(1).strip(), year
     return None, stem.strip(), year
+
+
+def artist_key(name):
+    """An artist's name for matching across sources: "The Starting Line" and "starting line" are one."""
+    return re.sub(r"[^a-z0-9]", "", re.sub(r"^the\s+", "", (name or "").lower().replace("&", "and")))
 
 
 def off_air(t):
@@ -1686,12 +1694,14 @@ class MusicBlock:
     breaks read from a Show; Station.air_music plays it."""
     category = "music"
 
-    def __init__(self, name, minutes, videos, break_after):
+    def __init__(self, name, minutes, videos, break_after, countdown=(), lead=None):
         self.src = f"music:{name}:{id(self)}"
         self.srcs = [src for src, _ in videos]
         self.videos = [(src, os.path.join(CACHE_DIR, e["file"]), e["duration"]) for src, e in videos]
         self.name, self.episode, self.minutes = name, "", minutes
-        self.duration = sum(d for _, _, d in self.videos)
+        self.countdown, self.lead = list(countdown), lead   # the Weekly Countdown it opens with, if any
+        self.duration = sum(d for _, _, d in self.videos) + (
+            screens.COUNTDOWN_SECONDS + STATIC_SECONDS if self.countdown else 0)
         self.break_after = set(break_after)
         years = sorted(y for y in (music_credit(src)[2] for src in self.srcs) if y)
         self.year = years[len(years) // 2] if years else None   # breaks lean to the videos' era
@@ -1884,9 +1894,28 @@ class Lineup:
             planned = {s for show in self.shows for s in getattr(show, "srcs", ())}
         pool = [(s, e) for s, e in self.cache.music_pool(start) if s not in planned]
         mids, target = self._music_target(minutes, end)
+        chart = []
+        if name in COUNTDOWN_BLOCKS:
+            try:
+                chart = screens.weekly_chart()
+            except Exception:
+                logger.exception("Could not get the Weekly Countdown")
+        if chart:
+            target -= screens.COUNTDOWN_SECONDS + STATIC_SECONDS
         random.shuffle(pool)
         artist = {s: music_credit(s)[0] for s, _ in pool}
         picked, total, artists = [], 0.0, set()
+        lead = None
+        ranks = {artist_key(a): rank for rank, a, _, _ in chart}
+        charted = [(ranks[artist_key(artist[s])], e["plays"], s, e) for s, e in pool
+                   if artist[s] and artist_key(artist[s]) in ranks and e["duration"] <= target]
+        if charted:   # the countdown's best placed artist with a video cached opens the block
+            rank, _, s, e = min(charted, key=lambda c: (c[0], c[1]))
+            pool.remove((s, e))
+            picked.append((s, e))
+            total += e["duration"]
+            artists.add(artist[s])
+            lead = (rank, *music_credit(s)[:2])
         while True:
             cands = [(s, e) for s, e in pool if e["duration"] <= target - total]
             if not cands:
@@ -1912,7 +1941,7 @@ class Lineup:
                 break_after.append(min(free)[1])
         for s, _ in picked:
             self.cache.reserve(s)
-        return MusicBlock(name, minutes, picked, sorted(break_after))
+        return MusicBlock(name, minutes, picked, sorted(break_after), chart, lead)
 
     def request(self, src):
         """Puts a cached show next in line (after any others asked for). Returns its planned start."""
@@ -2970,6 +2999,9 @@ class Station:
         self.current_show = block
         if not join:
             self._open(block.start)
+            if block.countdown:
+                self.emit(self.card(screens.countdown(block.countdown, block.lead, block.start,
+                                                      holiday_look(block.start.date()))))
         first, position = join or (0, 0.0)
         last = len(block.videos) - 1
         logger.info(f"{'Joining' if join else 'Airing'} {block.name} ({len(block.videos)} videos, "
