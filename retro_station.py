@@ -146,8 +146,9 @@ BLURB_CHEEKY_HOUR = 21
 BLURB_RAUNCHY_HOUR = 23
 SPECIAL_GAP_MINUTES = 10
 FRESH_SPECIALS = ("weather",)   # made again with the latest data just before they're queued
-WEATHER_PLACE = "Town, ST"
-WEATHER_LAT, WEATHER_LON = 0.0, 0.0
+# Where the weather and the emergency alerts are for, kept out of the repo in this file next to the script:
+# {"place": "Town, ST", "lat": 28.0, "lon": -82.5}. Without it there's no weather card and no alerts
+LOCATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "location.json")
 WEATHER_TZ = "America/New_York"
 # Emergency alerts from the National Weather Service for WEATHER_LAT/LON (retrotv_alerts.py). The worst
 # warnings cut into the show with the alert tones and a voice, then it picks up where it left off; other
@@ -342,6 +343,20 @@ logging.basicConfig(
 logger = logging.getLogger("RetroTV")
 
 td = datetime.timedelta
+
+
+def load_location():
+    """(place, lat, lon) from LOCATION_FILE, or Nones without it."""
+    try:
+        with open(LOCATION_FILE) as f:
+            here = json.load(f)
+        return str(here["place"]), float(here["lat"]), float(here["lon"])
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        logger.warning(f"No location ({e}): no weather card or emergency alerts")
+        return None, None, None
+
+
+WEATHER_PLACE, WEATHER_LAT, WEATHER_LON = load_location()
 
 
 def write_json(path, data):
@@ -2475,7 +2490,8 @@ class Station:
         # Staggered so the specials don't all come due in the first hour
         self.special_last = {k: time.time() - every * 60 * random.uniform(0.2, 0.8) for k, every in SPECIALS.items()}
         self.last_special = 0
-        self.alerts = alerts.Monitor(WEATHER_LAT, WEATHER_LON, ALERT_TEST_HOURS) if ALERTS else None
+        self.alerts = (alerts.Monitor(WEATHER_LAT, WEATHER_LON, ALERT_TEST_HOURS)
+                       if ALERTS and WEATHER_LAT is not None else None)
         self.eas_pending = None     # an alert card to cut in with, set by the alert thread
         self.eas_resume = None      # (show, file position) to pick back up after it
         self.eas_from_detour = False
@@ -2824,6 +2840,8 @@ class Station:
         if kind == "guide":
             return cards.guide(self.guide_rows(first_start), airs_at, season)
         if kind == "weather":
+            if WEATHER_LAT is None:
+                return None
             data = (cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ, max_age_minutes=2, timeout=4) if fresh
                     else cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ))
             return cards.weather(data, WEATHER_PLACE, airs_at, season) if data else None
