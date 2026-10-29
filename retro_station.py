@@ -270,6 +270,7 @@ RERUN_HOURS = 12           # nothing airs again within this long (holiday episod
 # unless everything a pick could use has been (then what aired longest ago goes first), and never anything aired
 # within REFETCH_MIN_DAYS
 AIRED_FILE = os.path.join(HOME_DIR, "retrotv_aired.json")
+REFILL_NOW_FILE = os.path.join(HOME_DIR, "retrotv_refill_now")   # touch it and restart: a refill right away
 AIRED_KEEP_DAYS = 60
 REFETCH_DAYS = 21
 REFETCH_MIN_DAYS = 7
@@ -1282,7 +1283,11 @@ class CacheManager:
         return True
 
     def _worker(self):
-        if self.unplayed_hours() < LOW_WATER_HOURS or self._holiday_short() or self._music_short():
+        asked = os.path.exists(REFILL_NOW_FILE)
+        if asked:
+            os.remove(REFILL_NOW_FILE)
+            logger.info("Refill asked for (REFILL_NOW_FILE)")
+        if asked or self.unplayed_hours() < LOW_WATER_HOURS or self._holiday_short() or self._music_short():
             self._safe_refill()
         while True:
             now = datetime.datetime.now()
