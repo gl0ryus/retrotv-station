@@ -313,6 +313,9 @@ SNIPE_SECONDS = 30         # a "NEXT: ..." lower third for the last seconds of a
 PROMO_AT = 8.0             # seconds into a show for the NEXT / LATER / TONIGHT lower third (0 = off)
 PROMO_PANEL_SECONDS = 4.5
 TONIGHT_HOUR = 20          # TONIGHT names the show planned for this hour, until shows near it
+# The day's anniversary episode (picked by retrotv_news.py: first aired on this date years ago) goes next in
+# line at the first show from this hour on that its rating allows, after a From the Vault card
+ANNIVERSARY_HOUR = 20
 
 # Phone remote and live guide on the home Wi-Fi: http://retrotv.local/
 REMOTE_PORT = 80
@@ -1158,7 +1161,13 @@ class CacheManager:
         """Shows to copy before anything else: the next marathon's episodes, then the season's shows.
         urgent: only what's needed today (a marathon within a day, a season that's already on)."""
         now = datetime.datetime.now()
-        wanted = []
+        with self.lock:
+            cached = set(self.entries)
+        today = broadcast_date(now)
+        held = [a["src"] for a in screens.anniversaries(today, today + td(days=1)).values()]
+        for src in held:
+            self.reserve(src)   # an anniversary episode waits for its slot (Station._queue_anniversary)
+        wanted = [src for src in held if src not in cached]
         for name, day, key in upcoming_marathons(now, self.indexer, 1 if urgent else MARATHON_PREP_DAYS):
             season = holiday_season(day)
             with self.lock:
@@ -2484,6 +2493,8 @@ class Station:
         self.on_air = False
         self.next_start = None      # when the next show should start (a :00/:30 boundary, or sign-on)
         self.current_show = None
+        self.anniversary = None     # today's anniversary episode once it's queued, until its card airs
+        self.anniversary_day = None
         self.skipping = False
         self.epoch = 0              # the player's skip counter when this step began
         self.detour = None          # ((number, name), src): a fake channel's show asked for from the remote
@@ -2620,6 +2631,7 @@ class Station:
         if off_air(start):
             self.sign_off(t)
             return
+        self._queue_anniversary(start)
         show = self.lineup.next_show(start)
         if not show:
             logger.warning("Nothing cached to play, standing by.")
@@ -2628,6 +2640,23 @@ class Station:
         self.on_air = True
         ON_AIR.set()
         self.air(show)
+
+    def _queue_anniversary(self, start):
+        """From ANNIVERSARY_HOUR, once a day, puts the day's anniversary episode next in line (copying it from
+        the NAS first if the refill didn't); air() opens it with the From the Vault card."""
+        day = broadcast_date(start)
+        hour = broadcast_hour(start)[1]
+        if self.anniversary_day == day:
+            return
+        info = screens.anniversaries(day).get(day)
+        if not info:
+            return
+        self.cache.reserve(info["src"])   # held for its slot (after a restart too), never picked before it
+        if hour < ANNIVERSARY_HOUR or not allowed(info["src"], hour):
+            return
+        self.anniversary_day, self.anniversary = day, info
+        logger.info(f"Anniversary: {os.path.basename(info['src'])}, {info['years']} years ago tonight. "
+                    + self.remote_play_next(info["src"]))
 
     def sign_off(self, t):
         signon = sign_on_after(t)
@@ -2902,6 +2931,10 @@ class Station:
             season = holiday_look(t.date())
             self.emit(self.card(events.marathon(show.marathon, show.name, t, season)))
             logger.info(f"{show.marathon}: {show.name} ({key})")
+        if self.anniversary and show.src == self.anniversary["src"] and not join:
+            self.emit(self.card(screens.anniversary(self.anniversary, show.name, show.episode, t,
+                                                    holiday_look(t.date()))))
+            self.anniversary = None
 
         breaks = show.breaks if show.breaks is not None else show.even_breaks()
         bounds = [0.0] + breaks + [show.duration]

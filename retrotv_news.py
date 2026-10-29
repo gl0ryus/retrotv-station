@@ -31,8 +31,8 @@ import anthropic
 
 from retrotv_blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
                             riff_key, _seen as aired_lately)
-from retrotv_meta import artist_key, music_credit, popup_key
-from retrotv_screens import DATA_DIR, POPUPS_FILE, SKY_FILE, USER_AGENT
+from retrotv_meta import air_date, artist_key, music_credit, popup_key
+from retrotv_screens import ANNIVERSARY_FILE, DATA_DIR, POPUPS_FILE, SKY_FILE, USER_AGENT
 
 logger = logging.getLogger("RetroTV.news")
 
@@ -53,6 +53,12 @@ PLANETS = (("Mercury", "mercury"), ("Venus", "venus"), ("Mars", "mars"), ("Jupit
            ("Saturn", "saturn barycenter"))
 PREFIX = re.compile(r"^(?:look|watch|video|listen|photos?)\s*:\s*", re.I)   # UPI's "Watch: ..." and the like
 MANIFEST_FILE = os.path.expanduser("~/retrotv_manifest.json")   # retro_station's cache manifest
+INDEX_FILE = os.path.expanduser("~/retrotv_index.json")         # retro_station's NAS listing
+SHOW_CATEGORIES = ("videos", "g4", "movies")                    # retro_station's MAIN_CATEGORIES
+SIGN_ON_HOUR = 9         # retro_station's: until then it's still the last broadcast day
+ANNIVERSARY_MIN_YEARS = 5
+ANNIVERSARY_KEEP_DAYS = 14
+PARTIAL = re.compile(r"incomplete|\bpart \d|\bpt\.? ?\d|\bclip\b|\bpromo\b", re.I)   # passed over if there's better
 WIKI_API = "https://en.wikipedia.org/w/api.php?"
 WIKI_CHARS = 6000        # of an article, sent with each video
 POPUP_VIDEOS = 15        # music videos looked up per run, sent to Claude 5 at a time
@@ -166,7 +172,18 @@ the article has it
 - nothing about deaths, illness, crimes, abuse or tragedies; nothing hateful or political
 If the article gives nothing safe and fun to say, skip the video (skip: true, no facts)."""
 
+WEEK_SYSTEM = """A retro TV station is airing an episode on the anniversary of its first broadcast. Under it, a \
+"That week" line says what else was going on then. From the Wikipedia text you get about that time, pick up to \
+two things from within a few days of the date that a TV viewer in the US then would remember: a big release, \
+launch or premiere in music, film, TV, games or technology, a championship, a science first, something quirky. \
+Never politics, wars, deaths, disasters, crime or illness, and nothing obscure or local to another country.
+
+Each one under 64 characters, past tense, a plain sentence starting with a capital ("The Nintendo Wii launched \
+in North America."). Use only what the text says. Return no lines if nothing fits."""
+
 NEWS_SCHEMA = _schema("quips", {level: {"type": "string"} for level in NEWS_LEVELS})
+WEEK_SCHEMA = {"type": "object", "properties": {"lines": {"type": "array", "items": {"type": "string"}}},
+               "required": ["lines"], "additionalProperties": False}
 POPUP_SCHEMA = _schema("videos", {"facts": {"type": "array", "items": {"type": "string"}}})
 RIFF_SCHEMA = _schema("shows", {"title": {"type": "string"},
                                 **{level: {"type": "array", "items": {"type": "string"}} for level in SHOW_LEVELS}})
@@ -428,6 +445,80 @@ def popup_facts():
     save(POPUPS_FILE, {"videos": videos, "missing": missing[-2000:]})
 
 
+# --- Anniversary airings ---
+
+def _broadcast_day():
+    return (datetime.datetime.now() - datetime.timedelta(hours=SIGN_ON_HOUR)).date()
+
+
+def _anniversary_episodes(day, index):
+    """[(src, first aired)] for the shows in the NAS listing first aired on day's date ANNIVERSARY_MIN_YEARS
+    or more years before, tapes aside (retro_station's is_tape: hours-long recordings)."""
+    out = []
+    for category in SHOW_CATEGORIES:
+        for src in index.get(category, []):
+            aired = air_date(src) if "/.Tapes/" not in src else None
+            if (aired and (aired.month, aired.day) == (day.month, day.day)
+                    and day.year - aired.year >= ANNIVERSARY_MIN_YEARS):
+                out.append((src, aired))
+    return out
+
+
+def week_lines(aired):
+    """Up to two things going on around `aired`, from Wikipedia's article on that month (or that year): the
+    text near each mention of the days around it goes to Claude."""
+    for title in (f"{aired.year} in the United States", f"{aired:%B} {aired.year}", str(aired.year)):
+        text = _wiki(action="query", prop="extracts", explaintext=1, redirects=1, titles=title)["query"]["pages"][0]
+        text = text.get("extract", "")
+        near = []
+        for k in range(-3, 4):
+            d = aired + datetime.timedelta(days=k)
+            for m in re.finditer(rf"\b{d:%B} {d.day}\b", text):
+                near.append(text[m.start():m.start() + 700])
+        if near:
+            break
+    else:
+        return []
+    snippet = "\n...\n".join(near)[:WIKI_CHARS]
+    answer = ask(WEEK_SYSTEM, f"The episode first aired on {aired:%A, %B} {aired.day}, {aired.year}.\n\n"
+                              f"From Wikipedia ({title}):\n{snippet}", WEEK_SCHEMA)
+    return [line for line in (re.sub(r"\s+", " ", l).strip() for l in answer["lines"]) if 8 < len(line) <= 70][:2]
+
+
+def pick_anniversaries():
+    """For today and tomorrow (broadcast days), the episode to air on its anniversary: of those first aired
+    on that date, a round number of years ago first, whole recordings over parts, then the oldest; with
+    week_lines for its card. Station._queue_anniversary airs it; the refill copies it ahead."""
+    data = load(ANNIVERSARY_FILE)
+    days = dict(data.get("days", {}))
+    today = _broadcast_day()
+    index = None
+    for day in (today, today + datetime.timedelta(days=1)):
+        if day.isoformat() in days:
+            continue
+        if index is None:
+            with open(INDEX_FILE) as f:
+                index = json.load(f)["media_map"]
+        found = _anniversary_episodes(day, index)
+        if not found:
+            days[day.isoformat()] = {}   # nothing that day; not looked for again
+            logger.info(f"No anniversary episode for {day}")
+            continue
+        src, aired = max(found, key=lambda f: ((day.year - f[1].year) % 5 == 0,
+                                               not PARTIAL.search(os.path.basename(f[0])), day.year - f[1].year))
+        try:
+            week = week_lines(aired)
+        except Exception as e:
+            logger.warning(f"No week lines for {aired}: {e!r}")
+            week = []
+        days[day.isoformat()] = {"src": src, "aired": aired.isoformat(), "years": day.year - aired.year,
+                                 "week": week}
+        logger.info(f"Anniversary for {day}: {os.path.basename(src)} ({day.year - aired.year} years) "
+                    f"of {len(found)}; that week: {week}")
+    keep = sorted(days)[-ANNIVERSARY_KEEP_DAYS:]
+    save(ANNIVERSARY_FILE, {"days": {d: days[d] for d in keep}})
+
+
 # --- Tonight's sky ---
 
 def sky_tonight():
@@ -439,7 +530,7 @@ def sky_tonight():
     from skyfield.magnitudelib import planetary_magnitude
 
     now = datetime.datetime.now().astimezone()
-    day = (now - datetime.timedelta(hours=9)).date()   # the broadcast day: until sign-on, it's still last night
+    day = _broadcast_day()   # until sign-on, it's still last night
     if load(SKY_FILE).get("day") == day.isoformat():
         return
     with open(LOCATION_FILE) as f:
@@ -506,7 +597,7 @@ def sky_tonight():
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     failed = False
-    for step in (quip_headlines, riff_shows, sky_tonight, popup_facts):
+    for step in (quip_headlines, riff_shows, sky_tonight, pick_anniversaries, popup_facts):
         try:
             step()
         except Exception:   # one step failing doesn't keep the other from running

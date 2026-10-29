@@ -35,6 +35,7 @@ GREEN = "&H0040C050&"
 FLORIDA_LOCATIONS = (12, 27)  # Cape Canaveral SFS, Kennedy Space Center
 SKY_FILE = os.path.join(DATA_DIR, "sky.json")   # tonight's sky over the house, worked out by retrotv_news.py
 POPUPS_FILE = os.path.join(DATA_DIR, "popups.json")   # Pop-Up Video facts by meta.popup_key, from retrotv_news.py
+ANNIVERSARY_FILE = os.path.join(DATA_DIR, "anniversary.json")   # each day's anniversary episode, from retrotv_news.py
 
 
 def fetch_json(name, url, max_age_minutes, stale_hours=24):
@@ -778,6 +779,46 @@ def markets(now, season=None):
     s.text(0.8, d, 512, 566, sources.upper(), BARLOW_B, 28, "&H00B0B8B0&", spacing=1, fade=fade, layer=3)
     return Card(lavfi_url(s.write("markets"), d, music("weather_bed.ogg"), background=MARKET_BACKGROUND, loop=True),
                 d, "markets")
+
+
+# --- Anniversary Airing ---
+
+def anniversaries(*days):
+    """{day: {"src", "aired", "years", "week"}} from ANNIVERSARY_FILE for the given dates that have one."""
+    try:
+        with open(ANNIVERSARY_FILE) as f:
+            picks = json.load(f).get("days", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return {d: picks[d.isoformat()] for d in days if picks.get(d.isoformat(), {}).get("src")}
+
+
+def anniversary(info, name, episode, now, season=None):
+    """The card before an anniversary airing: how many years ago tonight it first aired, the show and
+    episode, the date, and a line or two on what else was going on that week."""
+    d = 14.0
+    s = Script()
+    info_header(s, d, [(0, d, "From the Vault")], now, band="&H00182838&", season=season)
+    fade = (300, 400)
+    aired = datetime.date.fromisoformat(info["aired"])
+    episode = (episode or "").replace(f"{aired:%b} {aired.day}, {aired.year}", "").strip(" ·-")   # the date's below
+    s.text(0.2, d, 80, 214, f"{info['years']} YEARS AGO TONIGHT", BARLOW_X, 32, MUSTARD, align=4, spacing=6,
+           fade=fade, layer=3)
+    s.text(0.5, d, 80, 270, name.upper(), ARCHIVO, fit(name.upper(), ARCHIVO, 54, 864), WHITE, align=4, shadow=3,
+           shadow_color=BLACK, fade=fade, layer=3)
+    if episode:
+        s.text(0.8, d, 80, 322, clip_text(episode, 50), BARLOW_B, 34, CREAM, align=4, fade=fade, layer=3)
+    s.text(1.0, d, 80, 366 if episode else 326, f"FIRST AIRED {aired:%A, %B} {aired.day}, {aired.year}".upper(),
+           BARLOW_X, 30, SKY, align=4, spacing=2, fade=fade, layer=3)
+    week = info.get("week") or []
+    if week:
+        s.shape(1.4, d, 80, 404, rect(864, 3), MUSTARD, fade=fade, layer=3)
+        s.text(1.5, d, 80, 436, "THAT WEEK", BARLOW_X, 28, MUSTARD, align=4, spacing=6, fade=fade, layer=3)
+        for i, line in enumerate(week[:2]):
+            s.text(1.8 + i * 0.4, d, 80, 478 + i * 42, clip_text(line, 72), BARLOW_B, fit(line, BARLOW_B, 34, 864),
+                   WHITE, align=4, fade=fade, layer=3)
+    return Card(lavfi_url(s.write("anniversary"), d, music("history_bed.ogg"), background="0x140c06", loop=True), d,
+                "anniversary")
 
 
 # --- Weekly Countdown ---
