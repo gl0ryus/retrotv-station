@@ -34,6 +34,7 @@ QUIZ_BAND = "&H00481A30&"
 GREEN = "&H0040C050&"
 FLORIDA_LOCATIONS = (12, 27)  # Cape Canaveral SFS, Kennedy Space Center
 SKY_FILE = os.path.join(DATA_DIR, "sky.json")   # tonight's sky over the house, worked out by retrotv_news.py
+POPUPS_FILE = os.path.join(DATA_DIR, "popups.json")   # Pop-Up Video facts by meta.popup_key, from retrotv_news.py
 
 
 def fetch_json(name, url, max_age_minutes, stale_hours=24):

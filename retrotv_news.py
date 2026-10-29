@@ -21,6 +21,9 @@ import logging
 import os
 import re
 import sys
+import time
+import urllib.error
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -28,7 +31,8 @@ import anthropic
 
 from retrotv_blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
                             riff_key, _seen as aired_lately)
-from retrotv_screens import DATA_DIR, SKY_FILE, USER_AGENT
+from retrotv_meta import artist_key, music_credit, popup_key
+from retrotv_screens import DATA_DIR, POPUPS_FILE, SKY_FILE, USER_AGENT
 
 logger = logging.getLogger("RetroTV.news")
 
@@ -48,6 +52,14 @@ SKY_SIGN_OFF_HOUR = 2    # the night ends at retro_station's SIGN_OFF_HOUR, the 
 PLANETS = (("Mercury", "mercury"), ("Venus", "venus"), ("Mars", "mars"), ("Jupiter", "jupiter barycenter"),
            ("Saturn", "saturn barycenter"))
 PREFIX = re.compile(r"^(?:look|watch|video|listen|photos?)\s*:\s*", re.I)   # UPI's "Watch: ..." and the like
+MANIFEST_FILE = os.path.expanduser("~/retrotv_manifest.json")   # retro_station's cache manifest
+WIKI_API = "https://en.wikipedia.org/w/api.php?"
+WIKI_CHARS = 6000        # of an article, sent with each video
+POPUP_VIDEOS = 15        # music videos looked up per run, sent to Claude 5 at a time
+JOB_BUDGET = 200         # seconds: no new batch starts after this (retrotv-news.service stops it at 300)
+STARTED = time.time()
+POPUP_FACTS = 6          # facts kept per video
+FACT_CHARS = 90
 
 
 def levels_for(source):
@@ -139,7 +151,23 @@ def _schema(key, fields):
     }
 
 
+POPUP_SYSTEM = f"""You write the fact bubbles for Pop-Up Video on GL0RYUS Network, a retro TV station: while a \
+music video plays, little bubbles pop up with facts about the song, the band and the video, in the wry, \
+trivia-loving voice of VH1's Pop-Up Video in the late 90s.
+
+For each video you get the Wikipedia article on the song or, when there isn't one, on the artist. Use only facts \
+the article states. Never add anything from memory and never guess. When the article is about the artist, the \
+facts are about the artist, and about the song only where the article mentions it.
+
+Give up to {POPUP_FACTS} facts per video, in the order they should pop up:
+- one fact per bubble, under {FACT_CHARS - 10} characters, a plain sentence in sentence case
+- a light, wry touch is welcome ("He has since said he hates the song."), but the fact stays exactly as true as \
+the article has it
+- nothing about deaths, illness, crimes, abuse or tragedies; nothing hateful or political
+If the article gives nothing safe and fun to say, skip the video (skip: true, no facts)."""
+
 NEWS_SCHEMA = _schema("quips", {level: {"type": "string"} for level in NEWS_LEVELS})
+POPUP_SCHEMA = _schema("videos", {"facts": {"type": "array", "items": {"type": "string"}}})
 RIFF_SCHEMA = _schema("shows", {"title": {"type": "string"},
                                 **{level: {"type": "array", "items": {"type": "string"}} for level in SHOW_LEVELS}})
 
@@ -311,6 +339,95 @@ def riff_shows():
     save(SHOW_RIFFS_FILE, {"shows": shows, "unknown": unknown[-SKIPPED_KEEP:]})
 
 
+# --- Pop-Up Video facts ---
+
+def _wiki(**params):
+    """A Wikipedia API call, a second after the last one; a 429 is waited out (Retry-After) and tried once more."""
+    url = WIKI_API + urllib.parse.urlencode({**params, "format": "json", "formatversion": 2})
+    for attempt in range(2):
+        time.sleep(1.0)
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": USER_AGENT}), timeout=20) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code != 429 or attempt:
+                raise
+            time.sleep(min(60, int(e.headers.get("Retry-After") or 10)))
+
+
+def wiki_article(artist, song):
+    """(title, text) of the Wikipedia article on the song (one that names the artist), or failing that on the
+    artist; None if neither turns up."""
+    for query, want, about_song in ((f'"{song}" {artist} song', song, True), (f"{artist} band", artist, False)):
+        hits = _wiki(action="query", list="search", srsearch=query, srlimit=5)["query"]["search"]
+        for hit in hits:
+            title = hit["title"]
+            if artist_key(re.sub(r"\s*\([^)]*\)$", "", title)) != artist_key(want):   # "Song (Band song)"
+                continue
+            page = _wiki(action="query", prop="extracts", explaintext=1, redirects=1, titles=title)["query"]["pages"][0]
+            text = page.get("extract", "")
+            if about_song and artist_key(artist) not in artist_key(text[:3000]):
+                continue   # a different song with the same name
+            if len(text) > 400:
+                return title, text[:WIKI_CHARS]
+    return None
+
+
+def _fact(text):
+    text = re.sub(r"\s+", " ", text).strip()
+    return text if 10 < len(text) <= FACT_CHARS else ""
+
+
+def popup_facts():
+    """Pop-Up Video facts for the cached music videos that don't have them yet: each one's Wikipedia
+    article (the song's, else the artist's) goes to Claude, which picks the facts from it, filed in
+    POPUPS_FILE by meta.popup_key. Videos with no article or nothing to say are remembered as missing."""
+    data = load(POPUPS_FILE)
+    videos, missing = dict(data.get("videos", {})), list(data.get("missing", []))
+    with open(MANIFEST_FILE) as f:
+        manifest = json.load(f)
+    todo = {}
+    for src, e in manifest.items():
+        artist, song, _ = music_credit(src) if e.get("category") == "music" else (None, None, None)
+        key = popup_key(artist, song) if artist else None
+        if key and key not in videos and key not in missing:
+            todo.setdefault(key, (artist, song))
+    logger.info(f"{len(todo)} cached music videos need pop-up facts, {len(videos)} have them")
+    found = []
+    for key, (artist, song) in list(todo.items())[:POPUP_VIDEOS]:
+        if time.time() - STARTED > JOB_BUDGET - 70:   # leave time for Claude to write what was found
+            break
+        try:
+            article = wiki_article(artist, song)
+        except urllib.error.HTTPError as e:
+            logger.warning(f"Wikipedia said {e.code}; the rest wait for the next run")
+            break
+        if article:
+            found.append((key, artist, song, *article))
+        else:
+            missing.append(key)
+            logger.info(f"No article for {artist} - {song}")
+    for i in range(0, len(found), 5):
+        if time.time() - STARTED > JOB_BUDGET:
+            logger.info("Out of time; the rest wait for the next run")
+            break
+        chunk = found[i:i + 5]
+        content = "\n\n".join(f"Video {n}: {artist} - {song}\nArticle: {title}\n{text}"
+                              for n, (_, artist, song, title, text) in enumerate(chunk, 1))
+        answers = ask(POPUP_SYSTEM, content + "\n\nOne entry per video, by its number.", POPUP_SCHEMA)
+        for a in _numbered(answers["videos"], len(chunk)):
+            key, artist, song, title, _ = chunk[a["n"] - 1]
+            facts = [] if a["skip"] else [f for f in map(_fact, a["facts"]) if f][:POPUP_FACTS]
+            if facts:
+                videos[key] = {"artist": artist, "song": song, "source": title, "facts": facts}
+                logger.info(f"{artist} - {song} ({title}): " + " | ".join(facts))
+            else:
+                missing.append(key)
+                logger.info(f"Nothing to say for {artist} - {song}")
+        save(POPUPS_FILE, {"videos": videos, "missing": missing[-2000:]})   # after each batch
+    save(POPUPS_FILE, {"videos": videos, "missing": missing[-2000:]})
+
+
 # --- Tonight's sky ---
 
 def sky_tonight():
@@ -389,7 +506,7 @@ def sky_tonight():
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     failed = False
-    for step in (quip_headlines, riff_shows, sky_tonight):
+    for step in (quip_headlines, riff_shows, sky_tonight, popup_facts):
         try:
             step()
         except Exception:   # one step failing doesn't keep the other from running

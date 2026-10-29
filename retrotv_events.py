@@ -12,7 +12,7 @@ import subprocess
 import retrotv_cards as cards
 from retrotv_cards import (
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, MUSTARD, SHADOW_RED, SKY, W, H, WHITE, YELLOW,
-    ASSETS_DIR, CHANNEL, FONTS_DIR, NETWORK, RENDER, Card, Script, circle, clip_text, clock, fit, info_header, look,
+    ASSETS_DIR, CHANNEL, FONTS_DIR, NETWORK, RENDER, Card, Script, circle, clip_text, clock, esc, fit, info_header, look,
     music, rect, stripes,
     BLUSH, BROWN, CLOVER, DEEP_NAVY, GLORY_BLUE, GLORY_RED, GOLD, KELLY, LIGHT_BLUE, LILAC_SHADOW, MAPLE, MARDI_GREEN,
     MOON, MOSS, ORANGE, PAPEL_COLORS, PASTELS, PINK, PUMPKIN, PURPLE, ROSE, RUST, SLATE, SLIME, WINE, XMAS_GREEN,
@@ -389,6 +389,58 @@ def promo(panels, start, panel_seconds=4.5):
         s.text(a, b, 46 + tag, 494, name, BARLOW_X, sizes[i], CREAM, align=4, fade=fade, layer=3,
                extra=slide(46 + tag, 494) if first else "")
     return s.write("promo")
+
+
+# --- Pop-Up Video ---
+
+POPUP_SECONDS = 6.5     # each bubble's time on screen
+POPUP_FIRST = 20.0      # the first, once the lower third has gone
+POPUP_END_GAP = 15.0    # none this close to the end
+POPUP_EVERY = 22.0      # at most one this often
+POPUP_W, POPUP_TEXT = 480, 42
+# Where the bubbles go, in turn (their top-left corners): clear of the corner bug, and of the lower third
+# (which is gone by POPUP_FIRST)
+POPUP_SLOTS = ((70, 52), (474, 52), (70, 220), (474, 220))
+
+
+def _bubble(w, h, r, tail_x):
+    """An ASS drawing of a w x h speech bubble with rounded corners of radius r and a tail under it at
+    tail_x, starting at 0,0."""
+    c = r * 0.552   # how far a cubic's handles sit from a quarter circle's ends
+    body = (f"m {r} 0 l {w - r} 0 b {w - r + c} 0 {w} {r - c} {w} {r} l {w} {h - r} "
+            f"b {w} {h - r + c} {w - r + c} {h} {w - r} {h} l {r} {h} b {r - c} {h} 0 {h - r + c} 0 {h - r} "
+            f"l 0 {r} b 0 {r - c} {r - c} 0 {r} 0")
+    return body + f" m {tail_x} {h - 2} l {tail_x + 34} {h - 2} l {tail_x - 6} {h + 26}"
+
+
+def popups(facts, duration, begin=0.0):
+    """An ASS file of Pop-Up Video bubbles for the vf chain: the facts in turn over a music video of
+    `duration` seconds, spread from POPUP_FIRST to POPUP_END_GAP before the end, at file times. Bubbles
+    before `begin` (where playback joins) are left out. None if none fit."""
+    from retrotv_screens import wrap
+    span = duration - POPUP_END_GAP - POPUP_FIRST - POPUP_SECONDS
+    if span < 0 or not facts:
+        return None
+    n = min(len(facts), 1 + int(span // POPUP_EVERY))
+    gap = span / (n - 1) if n > 1 else 0
+    s = Script()
+    shown = 0
+    for i, fact in enumerate(facts[:n]):
+        a = POPUP_FIRST + i * gap
+        if a < begin + 1:
+            continue
+        x, y = POPUP_SLOTS[i % len(POPUP_SLOTS)]
+        lines = wrap(fact, BARLOW_X, POPUP_TEXT, POPUP_W - 44, max_lines=4)
+        h = 34 + len(lines) * (POPUP_TEXT + 4)
+        # Pops in: a quick overshoot from small, the way the bubbles did
+        pop = "\\fscx25\\fscy25\\t(0,150,\\fscx108\\fscy108)\\t(150,230,\\fscx100\\fscy100)"
+        s.shape(a, a + POPUP_SECONDS, x + POPUP_W / 2, y + (h + 26) / 2, _bubble(POPUP_W, h, 24, 70 + i % 2 * 240),
+                WHITE, fade=(0, 160), layer=1, align=5, extra=pop + "\\bord4\\3c&H00000000&")
+        s.raw(a, a + POPUP_SECONDS, f"\\an5\\pos({x + POPUP_W / 2:.0f},{y + h / 2:.0f})\\fn{BARLOW_X}"
+                                    f"\\fs{POPUP_TEXT}\\c&H00141414&\\bord0\\shad0\\fad(0,160){pop}",
+              "\\N".join(esc(l) for l in lines), layer=2)
+        shown += 1
+    return s.write("popups") if shown else None
 
 
 # --- Lottery ---
