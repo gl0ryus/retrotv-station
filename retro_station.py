@@ -7,6 +7,7 @@ import random
 import socket
 import hashlib
 import threading
+import collections
 import functools
 import shutil
 import subprocess
@@ -254,6 +255,7 @@ REMINDERS = {"Valentine's Day": (2, 14), "Mother's Day": ("mothersday", 0), "Fat
 REMINDER_DAYS = 7
 HOLIDAY_WEIGHT = 5.0
 HOLIDAY_SHOWS_CACHED = 14
+HOLIDAY_PER_SERIES = 2     # of those, at most this many from one series (late-October Attack of the Show is a lot)
 HOLIDAY_COMMERCIALS_CACHED = 60
 HOLIDAY_LEAD_DAYS = 3
 NEW_YEAR_COUNTDOWN = True  # a countdown into midnight on New Year's Eve
@@ -263,6 +265,14 @@ NEW_YEAR_COUNTDOWN = True  # a countdown into midnight on New Year's Eve
 SERIES_FILE = os.path.join(HOME_DIR, "retrotv_series.json")
 SERIES_CACHED_AHEAD = 6
 RERUN_HOURS = 12           # nothing airs again within this long (holiday episodes included)
+# When each show and music video last aired, kept even after its copy leaves the SD card (the manifest forgets
+# it then), so the refill doesn't copy back what just aired: nothing aired within REFETCH_DAYS is fetched again,
+# unless everything a pick could use has been (then what aired longest ago goes first), and never anything aired
+# within REFETCH_MIN_DAYS
+AIRED_FILE = os.path.join(HOME_DIR, "retrotv_aired.json")
+AIRED_KEEP_DAYS = 60
+REFETCH_DAYS = 21
+REFETCH_MIN_DAYS = 7
 
 # Tapes (whole recorded broadcasts in videos/shows/.Tapes, often hours long) share one pick between
 # them: together they weigh TAPE_WEIGHT, about as much as one series, and at most TAPES_CACHED
@@ -874,6 +884,7 @@ class CacheManager:
         self.entries = {}  # NAS path -> {"file", "category", "size", "duration", "plays", "last_played", "breaks",
                            #              "series", "order", "cached"}
         self.series_pos = {}  # series key -> order key of the last episode aired in order
+        self.aired = {}       # NAS path -> when it last aired (shows and music videos; see AIRED_FILE)
         self.reserved = set()
         self.fetching = {}    # NAS path -> callback, for shows asked for from the remote
         self.refilling = False
@@ -889,6 +900,14 @@ class CacheManager:
                 self.series_pos = json.load(f)
         except (OSError, ValueError):
             pass
+        try:
+            with open(AIRED_FILE) as f:
+                self.aired = dict(json.load(f))
+        except (OSError, ValueError, TypeError):
+            pass
+        for src, e in self.entries.items():   # what's cached and has aired counts too (before AIRED_FILE existed)
+            if e.get("last_played") and e["category"] != "commercials":
+                self.aired[src] = max(self.aired.get(src, 0), e["last_played"])
 
         # Start background thread
         self.thread = threading.Thread(target=self._worker, daemon=True)
@@ -1063,6 +1082,14 @@ class CacheManager:
             if e:
                 e["plays"] += 1
                 e["last_played"] = time.time()
+                if e["category"] != "commercials":
+                    self.aired[src] = e["last_played"]
+                    keep = time.time() - AIRED_KEEP_DAYS * 86400
+                    self.aired = {s: t for s, t in self.aired.items() if t > keep}
+                    try:
+                        write_json(AIRED_FILE, self.aired)
+                    except OSError as err:
+                        logger.error(f"Could not save what aired: {err}")
                 if in_order and e.get("series") and e.get("order"):
                     self.series_pos[e["series"]] = e["order"]
                     try:
@@ -1118,6 +1145,12 @@ class CacheManager:
         return [e for e in self.entries.values()
                 if e.get("series") == key and e["plays"] == 0 and (pos is None or e["order"] > pos)]
 
+    def _recently_aired(self, days=REFETCH_DAYS):
+        """What aired within `days`: not to be copied back from the NAS yet."""
+        cutoff = time.time() - days * 86400
+        with self.lock:
+            return {src for src, t in self.aired.items() if t > cutoff}
+
     def _tapes_waiting(self):
         """Unplayed tapes on the SD card."""
         with self.lock:
@@ -1125,18 +1158,22 @@ class CacheManager:
 
     def _next_episodes(self, key, count, holiday=None):
         """Up to `count` episodes of a series to copy next, so the cache holds a run in order. With
-        `holiday`, that season's episodes of the series come first."""
+        `holiday`, that season's episodes of the series come first. Episodes aired within REFETCH_DAYS wait,
+        unless there's nothing else (then the ones aired longest ago)."""
         with self.lock:
             ahead = self._ahead(key)
             have = {tuple(e["order"]) for e in self.entries.values() if e.get("series") == key and e.get("order")}
             pos = self.series_pos.get(key)
             frontier = max([o for o in [pos] + [e["order"] for e in ahead] if o is not None], default=None)
             cached = set(self.entries)
+            aired = dict(self.aired)
+        recent, too_soon = self._recently_aired(), self._recently_aired(REFETCH_MIN_DAYS)
         episodes = self.indexer.episodes(key)
         out = []
 
-        def take(order, src):
-            if len(out) < count and src not in cached and tuple(order) not in have:
+        def take(order, src, again=False):
+            if (len(out) < count and src not in cached and tuple(order) not in have
+                    and src not in (too_soon if again else recent)):
                 out.append(src)
                 have.add(tuple(order))
         if holiday:
@@ -1148,6 +1185,8 @@ class CacheManager:
                 take(order, src)
         for order, src in episodes:  # past the last episode: start again from the top
             take(order, src)
+        for order, src in sorted(episodes, key=lambda ep: aired.get(ep[1], 0)):
+            take(order, src, again=True)
         return out
 
     def _next_episode(self, key):
@@ -1179,21 +1218,35 @@ class CacheManager:
         season = holiday_season(now.date()) if urgent else holiday_ahead(now.date())
         if season:
             with self.lock:
-                have = sum(1 for s, e in self.entries.items() if e["category"] in MAIN_CATEGORIES and e["plays"] == 0
-                           and holiday_tag(s) == season and not e.get("archive"))
+                waiting = [(s, e) for s, e in self.entries.items() if e["category"] in MAIN_CATEGORIES
+                           and e["plays"] == 0 and holiday_tag(s) == season and not e.get("archive")]
                 cached = set(self.entries)
-            pool = [s for s in self.indexer.holiday_files(season, False) if s not in cached and s not in wanted]
+                aired = dict(self.aired)
+            have = len(waiting)
+            per_series = collections.Counter(e.get("series") for _, e in waiting if e.get("series"))
+            too_soon = self._recently_aired(REFETCH_MIN_DAYS)
+            pool = [s for s in self.indexer.holiday_files(season, False)
+                    if s not in cached and s not in wanted and s not in too_soon]
             random.shuffle(pool)
+            # Not aired lately first, in random order; once the season has run through those, the ones aired
+            # longest ago (a stable sort keeps the shuffle among the fresh ones)
+            cutoff = time.time() - REFETCH_DAYS * 86400
+            pool.sort(key=lambda s: (aired.get(s, 0) > cutoff, aired.get(s, 0) if aired.get(s, 0) > cutoff else 0))
             tape_room = TAPES_CACHED - self._tapes_waiting()
             for src in pool:
                 if have >= HOLIDAY_SHOWS_CACHED:
                     break
+                key = self.indexer.info(src)[0]
+                if key and per_series[key] >= HOLIDAY_PER_SERIES:
+                    continue
                 if is_tape(src):
                     if tape_room <= 0:
                         continue
                     tape_room -= 1
                 wanted.append(src)
                 have += 1
+                if key:
+                    per_series[key] += 1
         return wanted
 
     def _wanted_commercials(self):
@@ -1307,7 +1360,8 @@ class CacheManager:
             category = pool if pool != "shows" else self._fill_category(attempt)
             with self.lock:
                 cached = set(self.entries)
-            src = self.indexer.get_random(category, exclude=cached)
+            recent = self._recently_aired() if pool != "commercials" else set()
+            src = self.indexer.get_random(category, exclude=cached | recent)
             if not src:
                 continue
             if pool == "shows":
