@@ -21,6 +21,7 @@ import retrotv_remote as remote
 import retrotv_alerts as alerts
 import retrotv_blurbs as blurbs
 import retrotv_archive as archive
+import retrotv_scores as scores
 
 # --- Configuration ---
 MEDIA_ROOT = "/mnt/tower/.retrotv"
@@ -158,6 +159,15 @@ ALERT_TEST_HOURS = (10, 19)  # the weekly test airs at a break between shows wit
 # Items a crawl can go over. They all carry per-file vf options, so mpv drops the crawl filter when they end
 CRAWL_KINDS = ("act", "detour", "commercial")
 LOTTERY_HOUR = 23          # the nightly lottery drawing, right before the 11 PM show (None = off)
+# Live scores from ESPN's scoreboard (retrotv_scores.py): while games are on, a SCORES lower third crawls them
+# across a show (not breaks or music videos) every SCORES_MINUTES. The leagues in crawl order, each with the
+# home team whose game leads it in mustard: Bucs, Magic, Lightning, Rays
+SCORES = True
+SCORES_TEAMS = {"nfl": "TB", "nba": "ORL", "nhl": "TB", "mlb": "TB"}
+SCORES_MINUTES = 20
+SCORES_IDLE_MINUTES = 10   # with no games on, look again this often
+SCORES_MAX_SECONDS = 60    # a longer crawl leaves games off the end
+SCORES_CHECK_SECONDS = 15
 
 # Time-of-day programming: the first daypart that matches sets the mix. Days are 0 = Monday ...
 # 5 = Saturday; hours run past 24 for after midnight (26 = 2 AM), still counted as the evening before
@@ -2470,6 +2480,8 @@ class Station:
         self.eas_resume = None      # (show, file position) to pick back up after it
         self.eas_from_detour = False
         self.eas_until = 0.0        # no second cut-in or crawl before this
+        self.scores = scores.Scoreboard(SCORES_TEAMS) if SCORES else None
+        self.scores_next = 0.0      # no score crawl before this
 
     @staticmethod
     def _glitch_time():
@@ -3264,6 +3276,57 @@ class Station:
         item.on_end = lambda reason: self.alerts.test_aired() if reason == "eof" else None
         return item
 
+    # --- Live scores ---
+
+    def watch_scores(self):
+        """Background thread: crawls the live scores across a show every SCORES_MINUTES while games are on."""
+        while True:
+            try:
+                self.check_scores()
+            except Exception:
+                logger.exception("Score check failed")
+            time.sleep(SCORES_CHECK_SECONDS)
+
+    def check_scores(self):
+        # Fetches only once a show is on that the crawl could go over
+        if not self.on_air or self.eas_pending or time.time() < self.scores_next or not self._score_window():
+            return
+        games = self.scores.live()
+        if not games:
+            self.scores_next = time.time() + SCORES_IDLE_MINUTES * 60
+        elif self.air_scores(games):
+            self.scores_next = time.time() + SCORES_MINUTES * 60
+
+    def _score_window(self):
+        """(item, earliest, latest): the file times a score crawl can run between over what's playing, or
+        None. Shows only (not breaks or music videos), clear of the promo early in a show and the NEXT
+        lower third at its end."""
+        item = self.player.current()
+        if not item or item.kind not in ("act", "detour") or not item.started or isinstance(item.show, MusicBlock):
+            return None
+        overlay = item.overlay or {}
+        earliest = item.offset + (PROMO_AT + 3 * PROMO_PANEL_SECONDS if overlay.get("promo") else 0) + 5
+        latest = item.offset + item.duration - 2
+        if overlay.get("snipe"):
+            latest = min(latest, item.show.duration - SNIPE_SECONDS - 2)
+        return item, earliest, latest
+
+    def air_scores(self, games):
+        """Lays the score crawl over the show that's playing, if it fits in the window."""
+        window = self._score_window()
+        position = self.player.position()
+        if not window or position is None:
+            return False
+        item, earliest, latest = window
+        start = position + 0.8
+        shown, d = scores.fit(games, SCORES_MAX_SECONDS)
+        if start < earliest or start + d > latest:
+            return False
+        script = scores.ticker_script(shown, start)
+        self.player.add_filter("vf", f"@scores:lavfi=[ass=filename={script}:fontsdir={cards.FONTS_DIR}]")
+        logger.info(f"Scores ({d:.0f}s, {len(shown)} of {len(games)} live games) over {item.label}")
+        return True
+
     # --- Remote ---
 
     def remote_alert_test(self, kind):
@@ -3392,6 +3455,8 @@ def main():
     remote.start(station, REMOTE_PORT)
     if station.alerts:
         threading.Thread(target=station.watch_alerts, daemon=True).start()
+    if station.scores:
+        threading.Thread(target=station.watch_scores, daemon=True).start()
     station.run()
 
 if __name__ == "__main__":
