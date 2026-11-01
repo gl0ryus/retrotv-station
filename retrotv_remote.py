@@ -10,11 +10,15 @@ import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import retrotv_schedule as schedule
 from retrotv_cards import FONTS_DIR
 
 logger = logging.getLogger("RetroTV")
 
 PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrotv_remote.html")
+SCHEDULE_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrotv_schedule.html")
+MAX_BODY = 65536
+MAX_SCHEDULE_BODY = 1024 * 1024
 FONT_FILES = ("ArchivoBlack-Regular.ttf", "BarlowCondensed-Bold.ttf", "BarlowCondensed-ExtraBold.ttf",
               "BarlowCondensed-SemiBold.ttf")
 
@@ -22,6 +26,7 @@ FONT_FILES = ("ArchivoBlack-Regular.ttf", "BarlowCondensed-Bold.ttf", "BarlowCon
 class Handler(BaseHTTPRequestHandler):
     station = None
     page = b""
+    schedule_page = b""
     fonts = {}
 
     def log_message(self, *args):
@@ -37,9 +42,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _body(self):
+    def _body(self, limit=MAX_BODY):
         try:
-            length = min(int(self.headers.get("Content-Length", 0)), 65536)
+            length = min(int(self.headers.get("Content-Length", 0)), limit)
             return json.loads(self.rfile.read(length) or b"{}")
         except (ValueError, OSError):
             return {}
@@ -49,6 +54,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if url.path in ("/", "/index.html"):
                 self._send(200, self.page, "text/html; charset=utf-8")
+            elif url.path == "/schedule":
+                self._send(200, self.schedule_page, "text/html; charset=utf-8")
+            elif url.path == "/api/library":
+                self._send(200, self.station.remote_library())
+            elif url.path == "/api/schedule":
+                self._send(200, schedule.load())
             elif url.path == "/api/state":
                 self._send(200, self.station.remote_state())
             elif url.path == "/api/guide":
@@ -64,8 +75,22 @@ class Handler(BaseHTTPRequestHandler):
             logger.exception("Remote request failed")
             self._send(500, {"error": str(e)})
 
+    def _save_schedule(self):
+        try:
+            self._send(200, {"version": self.station.remote_save_schedule(self._body(MAX_SCHEDULE_BODY))})
+        except schedule.Conflict as e:
+            self._send(409, {"error": str(e)})
+        except ValueError as e:
+            self._send(400, {"error": str(e)})
+        except Exception as e:
+            logger.exception("Saving the schedule failed")
+            self._send(500, {"error": str(e)})
+
     def do_POST(self):
         url = urllib.parse.urlparse(self.path)
+        if url.path == "/api/schedule":
+            self._save_schedule()
+            return
         body = self._body()
         try:
             if url.path == "/api/skip":
@@ -78,6 +103,8 @@ class Handler(BaseHTTPRequestHandler):
                 message = self.station.remote_tune(int(body.get("channel", 0)), str(body.get("id", "")))
             elif url.path == "/api/main":
                 message = self.station.remote_main()
+            elif url.path == "/api/rescan":
+                message = self.station.remote_rescan()
             elif url.path == "/api/alert_test":
                 # ?kind= too: Windows shells mangle the quotes in a JSON body typed on the command line
                 kind = urllib.parse.parse_qs(url.query).get("kind", [""])[0] or str(body.get("kind", ""))
@@ -100,6 +127,12 @@ def start(station, port):
     except OSError as e:
         logger.error(f"Remote page missing: {e}")
         Handler.page = b"<p>Remote page missing.</p>"
+    try:
+        with open(SCHEDULE_PAGE_FILE, "rb") as f:
+            Handler.schedule_page = f.read()
+    except OSError as e:
+        logger.error(f"Schedule page missing: {e}")
+        Handler.schedule_page = b"<p>Schedule page missing.</p>"
     for name in FONT_FILES:
         try:
             with open(os.path.join(FONTS_DIR, name), "rb") as f:
