@@ -31,11 +31,11 @@ NOT_FEATURES = ("Wrestling", "Concerts")           # movies/ folders that are th
 TAPE_FAMILY_FILES = 3                              # file names sharing a start, to be listed as a tape item
 PROBE_SAMPLE = 3
 SPECIALS = (
-    ("archive:cartoons", "Classic Cartoons (archive.org)"),
-    ("music:After School Videos", "After School Videos"),
-    ("music:Saturday Night Videos", "Saturday Night Videos"),
-    ("music:Music Videos", "Music Videos"),
-    ("marathon:", "Friday Night Marathon"),
+    ("archive:cartoons", "Classic Cartoons", "Old cartoon shorts, downloaded from archive.org"),
+    ("music:After School Videos", "After School Videos", "{music} music videos, opening with the Weekly Countdown"),
+    ("music:Saturday Night Videos", "Saturday Night Videos", "{music} music videos, opening with the Weekly Countdown"),
+    ("music:Music Videos", "Music Videos", "{music} music videos, opening with the Weekly Countdown"),
+    ("marathon:", "Friday Night Marathon", "One show back to back; the show changes each week"),
 )
 TOPS = (("videos", "shows", "shows"), ("g4", "g4", "g4"), ("movies", "movies", "movies"))  # category, folder, kind
 
@@ -98,8 +98,9 @@ def library(media_map, media_root, rating, referenced=()):
         ratings = collections.Counter(rating(src) or "any" for src in files)
         out.append({"id": item, "name": name, "kind": kind, "files": len(files), "ratings": dict(ratings),
                     "minutes": lengths.get(item)})
-    out.extend({"id": item, "name": name, "kind": "specials", "files": 0, "ratings": {}, "minutes": None}
-               for item, name in SPECIALS)
+    music = f"{len(media_map.get('music', [])):,}"
+    out.extend({"id": item, "name": name, "kind": "specials", "files": 0, "ratings": {}, "minutes": None,
+                "about": about.format(music=music)} for item, name, about in SPECIALS)
     return sorted(out, key=lambda x: (x["kind"], x["name"].lower()))
 
 
