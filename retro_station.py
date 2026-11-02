@@ -20,6 +20,7 @@ import retrotv_events as events
 import retrotv_meta as meta
 import retrotv_remote as remote
 import retrotv_schedule as schedule
+import retrotv_launches as launches
 import retrotv_alerts as alerts
 import retrotv_blurbs as blurbs
 import retrotv_archive as archive
@@ -176,6 +177,11 @@ WEATHER_TZ = "America/New_York"
 # Emergency alerts from the National Weather Service for WEATHER_LAT/LON (retrotv_alerts.py). The worst
 # warnings cut into the show with the alert tones and a voice, then it picks up where it left off; other
 # warnings and watches crawl across the top. Silent while off the air: what's still active crawls at sign-on
+# Live launches cut in: Florida launches, crewed flights and the first flight of a new rocket (see retrotv_launches)
+LAUNCHES = True
+LAUNCH_CHECK_SECONDS = 15
+LAUNCH_BEFORE_SECONDS = 60     # the stream starts this long before liftoff, after the card
+LAUNCH_WATCH_SECONDS = 600     # and stays on this long: to about when the booster lands and the payload reaches orbit
 ALERTS = True
 ALERT_CHECK_SECONDS = 15
 ALERT_CRAWL_MINUTES = 15     # active alerts crawl again this often
@@ -2556,6 +2562,15 @@ class Player:
         self._finish([(item, {"reason": "stop"}) for _, item in queued])
         self._command(["playlist-next", "force"])
 
+    def end_item(self, item):
+        """Ends one item that's playing now, leaving what's queued after it."""
+        with self.cv:
+            if not item.started or item not in self.pending.values():
+                return
+            item.duration = min(item.duration, time.time() - item.started)
+            self.cv.notify_all()
+        self._command(["playlist-next", "force"])
+
     def set_volume(self, volume=None, toggle_mute=False):
         if volume is not None:
             self.volume = max(0, min(130, int(volume)))
@@ -2848,6 +2863,9 @@ class Station:
         self.alerts = (alerts.Monitor(WEATHER_LAT, WEATHER_LON, ALERT_TEST_HOURS)
                        if ALERTS and WEATHER_LAT is not None else None)
         self.eas_pending = None     # an alert card to cut in with, set by the alert thread
+        self.eas_follow = None      # what airs after that card: a live launch
+        self.launches = launches.Launches()
+        self.launch_live = None     # (launch, its Item, when it cut in)
         self.eas_resume = None      # (show, file position) to pick back up after it
         self.eas_from_detour = False
         self.eas_until = 0.0        # no second cut-in or crawl before this
@@ -3606,7 +3624,56 @@ class Station:
             if self.air_crawl(text, label, first):
                 self.alerts.crawled(ids)
 
-    def cut_in(self, card):
+    def watch_launches(self):
+        """Background thread: puts live launches on the air."""
+        while True:
+            try:
+                self.check_launches()
+            except Exception:
+                logger.exception("Launch check failed")
+            time.sleep(LAUNCH_CHECK_SECONDS)
+
+    def check_launches(self):
+        if self.launch_live:
+            launch, item, began = self.launch_live
+            on_for = time.time() - began
+            if on_for > item.duration + 30:
+                self.launch_live = None
+            elif launch.get("id") and on_for < launches.SCRUB_WATCH_SECONDS and not self.launches.still_going(launch):
+                logger.info(f"Launch held or scrubbed, back to the show: {launch.get('name')}")
+                self.player.end_item(item)
+                self.launch_live = None
+            return
+        if not self.on_air or near_sign_off(datetime.datetime.now()) or self.eas_pending:
+            return
+        found = self.launches.due()
+        if not found:
+            return
+        launch, _ = found
+        urls = self.launches.stream_for(launch)
+        lead = launches.liftoff(launch) - time.time()
+        # The cut takes a few seconds, the card five
+        if urls and lead <= LAUNCH_BEFORE_SECONDS + events.LAUNCH_SECONDS + 3:
+            self.launches.started(launch)
+            self.air_launch(launch, urls)
+
+    def air_launch(self, launch, urls, seconds=LAUNCH_WATCH_SECONDS):
+        rocket, _, mission = launch.get("name", "Live launch").partition(" | ")
+        where = ((launch.get("pad") or {}).get("location") or {}).get("name", "").split(",")[0]
+        season = holiday_look(datetime.date.today())
+        options = {"force-media-title": f"LIVE: {rocket}", "length": seconds, "cache": "yes", "demuxer-max-bytes": "32MiB"}
+        if len(urls) > 1:
+            options["audio-file"] = urls[1]
+        panels = [("LIVE", rocket), ("LIVE", mission or where)]
+        vf, _ = overlay_filter(seconds, bug=True, promo=events.promo(panels, 8.0, PROMO_PANEL_SECONDS))
+        if vf:
+            options["vf-append"] = vf
+        item = Item(urls[0], float(seconds), "launch", f"LIVE: {launch.get('name')}", options)
+        self.launch_live = (launch, item, time.time())
+        logger.info(f"Live launch cutting in: {launch.get('name')}, liftoff {launch.get('net')}")
+        self.cut_in(events.launch_cut_in(rocket, mission, where, season), follow=item)
+
+    def cut_in(self, card, follow=None):
         """Interrupts whatever is on with an alert card. A show picks up a few seconds before where it was cut."""
         item = self.player.current()
         self.eas_resume = None
@@ -3618,6 +3685,7 @@ class Station:
             self.eas_resume = (item.show, position)
         logger.info(f"Alert cutting in ({card.kind}, {card.duration:.0f}s)")
         self.eas_until = time.time() + card.duration + 10
+        self.eas_follow = follow
         self.eas_pending = card
         self.skipping = True
         self.player.flush()
@@ -3626,10 +3694,13 @@ class Station:
         """The step after a cut-in: the alert card, then back to the show where it was cut, or to whatever
         the main channel has on by now (if it was cut during a break or on another channel)."""
         card, self.eas_pending = self.eas_pending, None
+        follow, self.eas_follow = self.eas_follow, None
         resume, self.eas_resume = self.eas_resume, None
         self.detour, self.rejoining = None, False
         self.prev_kind = "card"  # a burst of static as it cuts in
         if not self.emit(self.card(card)):
+            return
+        if follow and not self.emit(follow):
             return
         if resume and resume[0] is self.interrupted:
             self.interrupted = None
@@ -3745,6 +3816,17 @@ class Station:
         return True
 
     # --- Remote ---
+
+    def remote_launch_test(self, url, seconds):
+        """Cuts in with any live stream right now, to check live launches."""
+        if not self.on_air:
+            return "The station is off the air."
+        urls = launches.resolve(url)
+        if not urls:
+            return "That stream isn't live, or can't be read."
+        test = {"name": "Live Launch Test | Test Stream", "pad": {"location": {"name": "G|TV"}}}
+        self.air_launch(test, urls, max(15, min(seconds, LAUNCH_WATCH_SECONDS)))
+        return "Test launch is on."
 
     def remote_alert_test(self, kind):
         """Airs a test alert right now, to check the alert system: kind "crawl", or a full cut-in."""
@@ -3913,6 +3995,8 @@ def main():
     player = Player()
     station = Station(cache_manager, lineup, player)
     remote.start(station, REMOTE_PORT)
+    if LAUNCHES:
+        threading.Thread(target=station.watch_launches, daemon=True).start()
     if station.alerts:
         threading.Thread(target=station.watch_alerts, daemon=True).start()
     if station.scores:

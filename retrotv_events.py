@@ -39,6 +39,7 @@ LOTTERY_BONUS = 46.0
 NEW_YEAR_SECONDS = 80.0
 NEW_YEAR_MIDNIGHT = 60.0   # where midnight falls in the countdown
 MARATHON_SECONDS = 6.0
+LAUNCH_SECONDS = 5.0
 ID_SECONDS = 4.5
 GREETING = "FROM ALL OF US AT GL0RYUS"   # the holiday IDs' sign-off line (the network's name, shortened to fit)
 
@@ -356,6 +357,24 @@ def snipe(name, start, end):
     s.text(start, end, 196, 494, name, BARLOW_X, size, CREAM, align=4, fade=(0, 300), layer=3,
            extra=slide(196, 494))
     return s.write("snipe")
+
+
+def launch_cut_in(rocket, mission, where, season=None):
+    """Cuts in for a live launch: "PARDON THE INTERRUPTION / A space launch is happening"."""
+    d = LAUNCH_SECONDS
+    lk = look(season)
+    s = Script()
+    lk.dress(s, 0, d)
+    s.text(0, d, 512, 118, "PARDON THE INTERRUPTION", BARLOW_X, 54, lk.accent, spacing=6, fade=(150, 300))
+    s.text(0.15, d, 512, 216, "LIVE LAUNCH", ARCHIVO, 112, lk.headline, shadow=7, shadow_color=lk.shadow, slant=-0.15,
+           fade=(200, 300), extra="\\t(0,250,\\fscx112\\fscy112)\\t(250,450,\\fscx100\\fscy100)")
+    stripes(s, 0.2, d, 180, 290, 660, colors=lk.stripes)
+    rocket = clip_text(rocket.upper(), 30)
+    s.text(0.5, d, 512, 372, rocket, BARLOW_X, fit(rocket, BARLOW_X, 76, 880), CREAM, shadow=3, shadow_color=lk.shadow)
+    mission = clip_text(mission.upper(), 40)
+    s.text(0.7, d, 512, 442, mission, BARLOW_X, fit(mission, BARLOW_X, 50, 880), CREAM)
+    s.text(1.0, d, 512, 505, clip_text(f"A SPACE LAUNCH IS HAPPENING · {where.upper()}", 56), BARLOW_S, 34, lk.accent, spacing=3)
+    return Card(cards.lavfi_url(s.write("launch"), d, music("marathon_sting.ogg"), background=lk.bg), d, "card")
 
 
 def promo(panels, start, panel_seconds=4.5):

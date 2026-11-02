@@ -103,6 +103,9 @@ class Handler(BaseHTTPRequestHandler):
                 message = self.station.remote_tune(int(body.get("channel", 0)), str(body.get("id", "")))
             elif url.path == "/api/main":
                 message = self.station.remote_main()
+            elif url.path == "/api/launch_test":
+                query = urllib.parse.parse_qs(url.query)
+                message = self.station.remote_launch_test(query.get("url", [""])[0], int(query.get("seconds", ["60"])[0]))
             elif url.path == "/api/rescan":
                 message = self.station.remote_rescan()
             elif url.path == "/api/alert_test":
