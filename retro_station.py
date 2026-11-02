@@ -123,6 +123,11 @@ MID_BREAK_SECONDS = (75, 240)     # each mid-show break runs at least / at most 
 MIN_END_BREAK_SECONDS = 70        # the break between shows, at least
 INTRO_SECONDS = 4.5               # the station ID or bumper right before a show
 UP_NEXT_SECONDS = (5.5, 12.0)     # the Up Next card stretches within this to absorb the last seconds
+# A show that would miss its schedule slot with full breaks gives up commercials to fit: fewer mid-show breaks, then
+# none, then only the Up Next card before the next show. One that fills a whole slot can run this much past it, since
+# the next show's breaks make the time back up. Longer than that, it waits for a slot that can hold it.
+TIGHT_END_SECONDS = UP_NEXT_SECONDS[0] + STATIC_SECONDS + INTRO_SECONDS
+LATE_START_MINUTES = 5
 SHORT_SHOW_MINUTES = 15           # shorter shows (cartoon segments) share a half hour instead of padding one out
 FILLER_MAX_SECONDS = 35           # bumps and commercials this short top up the end of a break
 COMMERCIAL_MAX_SECONDS = 240      # longer "commercials" (music videos, specials) stay out of breaks
@@ -205,7 +210,7 @@ MIX_FOLDERS = {"videos": ("videos", "g4")}
 # folders. Late-night fare airs only from LATE_NIGHT_HOUR until sign-off, kids' shows only before
 # KIDS_END_HOUR. Bumps in the Bumps folder are Adult Swim's unless they say Toonami or Cartoon Network
 LATE_NIGHT_HOUR = 22
-KIDS_END_HOUR = 21
+KIDS_END_HOUR = 12
 LATE_NIGHT_KEYWORDS = (
     r"adult swim", r"\[as\]", r"\bas\d{3}\b", r"springer", r"south park", r"chappelle", r"reno ?911",
     r"always sunny", r"\biasip\b", r"totally busted", r"flavor of love", r"\broast\b", r"uncensored",
@@ -1224,17 +1229,18 @@ class CacheManager:
                 self.series_pos.pop(self.indexer.info(src)[0], None)
         logger.info(f"Schedule: {item} has aired everything, starting over.")
 
-    def next_in_item(self, item, start, exclude, fits):
+    def next_in_item(self, item, start, exclude, fits, room=None):
         """(src, entry, in order) for an item's next airing at `start`, or None. A show keeps to its order: when its
         next episode can't air, the show sits this turn out. Anything else airs whichever cached file works.
-        fits: (src, entry) -> bool, or None when it may run over, which then takes the shortest."""
+        fits: (src, entry) -> bool, or None when it may run over, which then takes the shortest. room: the most seconds
+        the slot can ever hold; an episode longer than that waits for a bigger slot, and the show carries on past it."""
         queue = self._item_queue(item, start)
         if not queue and self._episodes(item, start):
             self._start_over(item, start)
             queue = self._item_queue(item, start)
         hour = broadcast_hour(start)[1]
         in_order = item.startswith(("shows/", "g4/", "marathon:"))
-        loose = []
+        loose, passed = [], False
         for src in queue:
             if src in exclude or src in self.reserved or not allowed(src, hour):
                 continue
@@ -1247,9 +1253,11 @@ class CacheManager:
             if fits is None and not ordered:
                 loose.append((src, e))
             elif fits is None or fits(src, e):
-                return src, e, ordered
+                return src, e, ordered and not passed   # its place stays at the episode still waiting
             elif ordered:
-                return None
+                if room is None or (e["duration"] or 1800.0) + INTRO_SECONDS + TIGHT_END_SECONDS <= room:
+                    return None
+                passed = True
         if loose:
             src, e = min(loose, key=lambda x: x[1]["duration"] or 1800.0)
             return src, e, False
@@ -1819,6 +1827,14 @@ def slot_end(duration, category, src, start):
     return end, extra, True
 
 
+def tight_plan(duration, mids, start, closes):
+    """(mid-show breaks to keep, when it ends) for a show that has to fit by `closes` on short breaks."""
+    spare = (closes - start).total_seconds() - duration - INTRO_SECONDS - TIGHT_END_SECONDS
+    if spare < 0:
+        return 0, start + td(seconds=duration + INTRO_SECONDS + TIGHT_END_SECONDS)
+    return min(mids, int(spare // MID_BREAK_SECONDS[0])), closes
+
+
 class Show:
     def __init__(self, src, path, entry, in_order=False):
         self.src, self.path = src, path
@@ -1839,6 +1855,7 @@ class Show:
         self.sign_off_before = None        # set when the station is off the air before this show
         self.window: tuple | None = None   # (opens, closes) of the schedule slot it was picked for
         self.overrun = False               # it may run past the slot's close
+        self.keep_breaks = None            # how many mid-show breaks a tight slot leaves it, None for all
 
     def title(self):
         return f"{self.name} · {self.episode}" if self.episode else self.name
@@ -1859,10 +1876,22 @@ class Show:
         """Fallback when the show airs before its breaks were analysed."""
         return [round(b, 2) for b in act_targets(self.duration, self.category, self.src)]
 
+    def kept_breaks(self):
+        """Where it breaks for commercials: all its breaks, or as many as a tight slot leaves room for, evenly spread."""
+        breaks = self.breaks if self.breaks is not None else self.even_breaks()
+        if self.keep_breaks is None or len(breaks) <= self.keep_breaks:
+            return breaks
+        step = len(breaks) / (self.keep_breaks + 1)
+        return [breaks[int(step * (i + 1))] for i in range(self.keep_breaks)]
+
     def plan_slot(self, start):
         self.start = start
         self.end, _, _ = slot_end(self.duration, self.category, self.src, start)
         mids = len(act_targets(self.duration, self.category, self.src))
+        self.keep_breaks = None
+        if self.window and self.end > self.window[1] and not off_air(self.window[1]):   # sign-off can wait for it
+            mids, self.end = tight_plan(self.duration, mids, start, self.window[1])
+            self.keep_breaks = mids
         fill = (self.end - start).total_seconds() - self.duration - INTRO_SECONDS
         if mids:
             self.mid_target = min(MID_BREAK_SECONDS[1], max(MID_BREAK_SECONDS[0], fill / (mids + 1.5)))
@@ -2001,20 +2030,29 @@ class Lineup:
         return self._filler(start, prev, planned)
 
     def _from_slot(self, group, opens, closes, start, planned):
-        """The group's next show that ends by the time its slot closes. At the top of the slot, if none does, the
-        one that runs over least: it's what's scheduled, and whatever follows joins late."""
+        """The group's next show that ends by the time its slot closes, giving up commercials if it has to. At the
+        top of the slot, it can run a little past; if nothing can, the one that runs over least: it's what's
+        scheduled, and whatever follows joins late."""
         points = self._fixed_points(start)
+        at_top = start - opens < td(minutes=1)
+        by = min(points) if points else closes
+        limit = (by - start).total_seconds() + (LATE_START_MINUTES * 60 if at_top else 0)
+        room = (closes - opens).total_seconds() + LATE_START_MINUTES * 60
 
         def fits(src, e):
-            return not self._crosses((src, e, 1.0, False), start, points)
-        show = self._next_from_group(group, closes, start, planned, fits)
-        if not show and start - opens < td(minutes=1):
-            show = self._next_from_group(group, closes, start, planned, None)
+            duration = e["duration"] or 1800.0
+            return (not self._crosses((src, e, 1.0, False), start, points)
+                    or duration + INTRO_SECONDS + TIGHT_END_SECONDS <= limit)
+        show = self._next_from_group(group, closes, start, planned, fits, room)
+        if show and getattr(show, "duration", 0) + INTRO_SECONDS + TIGHT_END_SECONDS > (by - start).total_seconds():
+            show.overrun = True
+        if not show and at_top:
+            show = self._next_from_group(group, closes, start, planned, None, room)
             if show:
                 show.overrun = True
         return show
 
-    def _next_from_group(self, group, closes, start, planned, fits):
+    def _next_from_group(self, group, closes, start, planned, fits, room):
         items = group["items"]
         if not items:
             return None
@@ -2038,7 +2076,7 @@ class Lineup:
             if item.startswith("music:"):
                 show = self._music_for_slot(item[6:], closes, start)
             else:
-                found = self.cache.next_in_item(item, start, planned, fits)
+                found = self.cache.next_in_item(item, start, planned, fits, room)
                 show = self._group_show(group, item, found) if found else None
             if show:
                 self.cache.set_turn(group["id"], (at + 1) % len(items))
@@ -2930,6 +2968,9 @@ class Station:
         info = screens.anniversaries(day).get(day)
         if not info:
             return
+        if self.cache.aired.get(info["src"], 0) > time.time() - 86400:   # already aired: a restart forgets that
+            self.anniversary_day = day
+            return
         self.cache.reserve(info["src"])   # held for its slot (after a restart too), never picked before it
         if hour < ANNIVERSARY_HOUR or not allowed(info["src"], hour):
             return
@@ -3219,7 +3260,7 @@ class Station:
                                                     holiday_look(t.date()))))
             self.anniversary = None
 
-        breaks = show.breaks if show.breaks is not None else show.even_breaks()
+        breaks = show.kept_breaks()
         bounds = [0.0] + breaks + [show.duration]
         first, position = join or (0, 0.0)
         logger.info(f"{'Joining' if join else 'Airing'} {show.title()} ({show.category}, {len(bounds) - 1} act(s), "
@@ -3441,7 +3482,7 @@ class Station:
                     if elapsed < clock_at:
                         return i + 1, 0.0  # mid-break: back in for the next video
             return None
-        breaks = show.breaks if show.breaks is not None else show.even_breaks()
+        breaks = show.kept_breaks()
         bounds = [0.0] + breaks + [show.duration]
         clock_at = 0.0
         for i in range(len(bounds) - 1):
@@ -3592,7 +3633,7 @@ class Station:
             if show.videos[video][2] - position > 15:
                 return video, position
             return (video + 1, 0.0) if video < len(show.videos) - 1 else None
-        breaks = show.breaks if show.breaks is not None else show.even_breaks()
+        breaks = show.kept_breaks()
         bounds = [0.0] + breaks + [show.duration]
         for i in range(len(bounds) - 1):
             if position < bounds[i + 1]:
