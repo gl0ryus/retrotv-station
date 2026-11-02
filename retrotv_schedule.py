@@ -24,6 +24,7 @@ SCHEDULE_FILE = os.path.expanduser("~/retrotv_schedule.json")
 LENGTHS_FILE = os.path.expanduser("~/retrotv_data/folder_lengths.json")   # {item id: minutes}, from a sample of files
 FIRST_HOUR, LAST_HOUR = 9, 26    # as the station counts them: 26 is 2 AM, when it signs off
 MODES = ("in_order", "shuffle")  # a group's shows take turns, next episode each | whatever has waited longest
+# A group's "overflow": whether a show too long for its slot runs past it (the default), or gets cut off at the end of it
 COLORS = ("g4", "kids", "sitcom", "drama", "late", "tape", "movie", "music")
 MAX_GROUPS, MAX_ITEMS, MAX_SLOTS, MAX_BLOCKS = 500, 200, 400, 100   # far more than a week holds
 NOT_FEATURES = ("Wrestling", "Concerts")           # movies/ folders that are their own items
@@ -198,9 +199,11 @@ def validate(body, known):
             raise ValueError(f"group {name}: not in the library: {unknown[0]}")
         if g.get("mode") not in MODES or g.get("color") not in COLORS:
             raise ValueError(f"group {name}: bad mode or color")
+        if not isinstance(g.get("overflow", True), bool):
+            raise ValueError(f"group {name}: overflow is on or off")
         ids.add(gid)
         clean_groups.append({"id": gid, "name": name.strip(), "items": list(dict.fromkeys(items)),
-                             "mode": g["mode"], "color": g["color"]})
+                             "mode": g["mode"], "color": g["color"], "overflow": g.get("overflow", True)})
     clean_slots, by_day = [], collections.defaultdict(list)
     for s in slots:
         if not isinstance(s, dict):

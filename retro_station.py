@@ -124,10 +124,11 @@ MIN_END_BREAK_SECONDS = 70        # the break between shows, at least
 INTRO_SECONDS = 4.5               # the station ID or bumper right before a show
 UP_NEXT_SECONDS = (5.5, 12.0)     # the Up Next card stretches within this to absorb the last seconds
 # A show that would miss its schedule slot with full breaks gives up commercials to fit: fewer mid-show breaks, then
-# none, then only the Up Next card before the next show. One that fills a whole slot can run this much past it, since
-# the next show's breaks make the time back up. Longer than that, it waits for a slot that can hold it.
+# none, then only the Up Next card before the next show. If it still doesn't fit, its group decides: with "overflow" on
+# it runs past the slot and the next one starts late; off, it's cut off at the end of the slot. A group that gets cut
+# off starts nothing with less than MIN_CUT_MINUTES left in the slot.
 TIGHT_END_SECONDS = UP_NEXT_SECONDS[0] + STATIC_SECONDS + INTRO_SECONDS
-LATE_START_MINUTES = 5
+MIN_CUT_MINUTES = 10
 SHORT_SHOW_MINUTES = 15           # shorter shows (cartoon segments) share a half hour instead of padding one out
 FILLER_MAX_SECONDS = 35           # bumps and commercials this short top up the end of a break
 COMMERCIAL_MAX_SECONDS = 240      # longer "commercials" (music videos, specials) stay out of breaks
@@ -1229,18 +1230,18 @@ class CacheManager:
                 self.series_pos.pop(self.indexer.info(src)[0], None)
         logger.info(f"Schedule: {item} has aired everything, starting over.")
 
-    def next_in_item(self, item, start, exclude, fits, room=None):
+    def next_in_item(self, item, start, exclude, fits, must_air=False):
         """(src, entry, in order) for an item's next airing at `start`, or None. A show keeps to its order: when its
         next episode can't air, the show sits this turn out. Anything else airs whichever cached file works.
-        fits: (src, entry) -> bool, or None when it may run over, which then takes the shortest. room: the most seconds
-        the slot can ever hold; an episode longer than that waits for a bigger slot, and the show carries on past it."""
+        fits: (src, entry) -> bool, or None when it may run over, which then takes the shortest. must_air: a show's next
+        episode airs whether or not it fits."""
         queue = self._item_queue(item, start)
         if not queue and self._episodes(item, start):
             self._start_over(item, start)
             queue = self._item_queue(item, start)
         hour = broadcast_hour(start)[1]
         in_order = item.startswith(("shows/", "g4/", "marathon:"))
-        loose, passed = [], False
+        loose = []
         for src in queue:
             if src in exclude or src in self.reserved or not allowed(src, hour):
                 continue
@@ -1252,12 +1253,10 @@ class CacheManager:
                 continue
             if fits is None and not ordered:
                 loose.append((src, e))
-            elif fits is None or fits(src, e):
-                return src, e, ordered and not passed   # its place stays at the episode still waiting
+            elif fits is None or fits(src, e) or (ordered and must_air):
+                return src, e, ordered
             elif ordered:
-                if room is None or (e["duration"] or 1800.0) + INTRO_SECONDS + TIGHT_END_SECONDS <= room:
-                    return None
-                passed = True
+                return None
         if loose:
             src, e = min(loose, key=lambda x: x[1]["duration"] or 1800.0)
             return src, e, False
@@ -1357,7 +1356,8 @@ class CacheManager:
                             files = self._item_queue(item, when)
                             if not item.startswith(("shows/", "g4/", "marathon:")):
                                 files = cached_first(files)
-                        src = next_of(item, files, slot["start"]) if minutes <= left or left == window else None
+                        room = minutes <= left or left == window or not group.get("overflow", True)
+                        src = next_of(item, files, slot["start"]) if room else None
                         if not src:
                             misses += 1
                             continue
@@ -1856,6 +1856,7 @@ class Show:
         self.window: tuple | None = None   # (opens, closes) of the schedule slot it was picked for
         self.overrun = False               # it may run past the slot's close
         self.keep_breaks = None            # how many mid-show breaks a tight slot leaves it, None for all
+        self.cut = False                   # stops at self.duration, before the file ends (see cut_to)
 
     def title(self):
         return f"{self.name} · {self.episode}" if self.episode else self.name
@@ -1879,10 +1880,16 @@ class Show:
     def kept_breaks(self):
         """Where it breaks for commercials: all its breaks, or as many as a tight slot leaves room for, evenly spread."""
         breaks = self.breaks if self.breaks is not None else self.even_breaks()
+        if self.cut:
+            breaks = [b for b in breaks if b < self.duration - 120]
         if self.keep_breaks is None or len(breaks) <= self.keep_breaks:
             return breaks
         step = len(breaks) / (self.keep_breaks + 1)
         return [breaks[int(step * (i + 1))] for i in range(self.keep_breaks)]
+
+    def cut_to(self, seconds):
+        """Airs only the first `seconds` of the file."""
+        self.duration, self.cut = seconds, True
 
     def plan_slot(self, start):
         self.start = start
@@ -1995,7 +2002,7 @@ class Lineup:
         if not window or not show.start:
             return False
         return (show.start < window[0] - td(minutes=1) or show.start >= window[1]
-                or (not getattr(show, "overrun", False) and show.end > window[1]))
+                or (not getattr(show, "overrun", False) and show.end > window[1] and not off_air(window[1])))
 
     def _prune(self):
         """A skip, a request or a late start can push what's planned out of its slot: from the first show that
@@ -2026,33 +2033,47 @@ class Lineup:
                     logger.info(f"Schedule: nothing from {group['name']} fits at {cards.clock(start)}, filling with {show.title()}")
             if show:
                 show.window = (opens, closes)
+                if not group.get("overflow", True) and isinstance(show, Show):
+                    self._cut_to_slot(show, start)
             return show
         return self._filler(start, prev, planned)
 
     def _from_slot(self, group, opens, closes, start, planned):
-        """The group's next show that ends by the time its slot closes, giving up commercials if it has to. At the
-        top of the slot, it can run a little past; if nothing can, the one that runs over least: it's what's
-        scheduled, and whatever follows joins late."""
+        """The group's next show that ends by the time its slot closes, giving up commercials if it has to. A group
+        that gets cut off (see _cut_to_slot) airs its next show however long it is. Otherwise, at the top of the slot
+        a show whose turn it is airs anyway and runs over, and so does whatever runs over least if nothing else can
+        air: it's what's scheduled, and whatever follows joins late."""
         points = self._fixed_points(start)
         at_top = start - opens < td(minutes=1)
-        by = min(points) if points else closes
-        limit = (by - start).total_seconds() + (LATE_START_MINUTES * 60 if at_top else 0)
-        room = (closes - opens).total_seconds() + LATE_START_MINUTES * 60
+        left = ((min(points) if points else closes) - start).total_seconds()
+        if not group.get("overflow", True):
+            if left < MIN_CUT_MINUTES * 60:
+                return None
+            return self._next_from_group(group, closes, start, planned, lambda src, e: True)
 
         def fits(src, e):
             duration = e["duration"] or 1800.0
             return (not self._crosses((src, e, 1.0, False), start, points)
-                    or duration + INTRO_SECONDS + TIGHT_END_SECONDS <= limit)
-        show = self._next_from_group(group, closes, start, planned, fits, room)
-        if show and getattr(show, "duration", 0) + INTRO_SECONDS + TIGHT_END_SECONDS > (by - start).total_seconds():
-            show.overrun = True
+                    or duration + INTRO_SECONDS + TIGHT_END_SECONDS <= left)
+        show = self._next_from_group(group, closes, start, planned, fits, at_top)
         if not show and at_top:
-            show = self._next_from_group(group, closes, start, planned, None, room)
-            if show:
-                show.overrun = True
+            show = self._next_from_group(group, closes, start, planned, None)
+        if show and getattr(show, "duration", 0) + INTRO_SECONDS + TIGHT_END_SECONDS > left:
+            show.overrun = True
         return show
 
-    def _next_from_group(self, group, closes, start, planned, fits, room):
+    def _cut_to_slot(self, show, start):
+        """A show from a group that can't run over stops where the slot ends."""
+        points = self._fixed_points(start)
+        if not points:
+            return
+        room = (min(points) - start).total_seconds() - INTRO_SECONDS - TIGHT_END_SECONDS
+        if show.duration > room:
+            show.cut_to(max(60.0, room))
+            show.overrun = False
+            logger.info(f"Schedule: {show.title()} gets cut off at {cards.clock(min(points))}")
+
+    def _next_from_group(self, group, closes, start, planned, fits, must_air=False):
         items = group["items"]
         if not items:
             return None
@@ -2076,7 +2097,7 @@ class Lineup:
             if item.startswith("music:"):
                 show = self._music_for_slot(item[6:], closes, start)
             else:
-                found = self.cache.next_in_item(item, start, planned, fits, room)
+                found = self.cache.next_in_item(item, start, planned, fits, must_air)
                 show = self._group_show(group, item, found) if found else None
             if show:
                 self.cache.set_turn(group["id"], (at + 1) % len(items))
@@ -3272,7 +3293,7 @@ class Station:
             options = {"force-media-title": show.title()}
             if begin:
                 options["start"] = begin
-            if not last:
+            if not last or show.cut:
                 options["end"] = bounds[i + 1]
             if i == first and SHOW_TITLE_SECONDS:
                 options["osd-playing-msg"] = osd_msg(show.osd_title())

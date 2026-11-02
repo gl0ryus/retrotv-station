@@ -390,7 +390,7 @@ function slotWarnings(s, group) {
     if (it.kind === "specials" || !it.files) continue;
     const hold = holdOf(it);
     if (hold && !hold.allows(s.start)) out.push(hold.text);
-    if (group.mode === "in_order" && it.minutes && it.minutes > hours(s) * 60) out.push(`${it.name} runs about ${it.minutes} min, longer than this ${hours(s) * 60} min slot`);
+    if (group.mode === "in_order" && group.overflow !== false && it.minutes && it.minutes > hours(s) * 60) out.push(`${it.name} runs about ${it.minutes} min, longer than this ${hours(s) * 60} min slot`);
   }
   if (!group.items.length) out.push("This group has no shows yet");
   return out;
@@ -492,11 +492,15 @@ function groupDetail(group, count) {
     return el("span", { class: info ? "chip" : "chip missing", "data-tip": info ? info.name : `${id} isn't in the library` }, el("span", { text: info ? info.name : id }),
       el("button", { text: "×", "aria-label": `Remove ${info ? info.name : id}`, onclick() { remember(); group.items = group.items.filter(i => i !== id); render(); } }));
   })) : el("div", { class: "meta", text: "Drag shows from the library onto this group." });
-  const inOrder = group.mode === "in_order";
+  const inOrder = group.mode === "in_order", runsOver = group.overflow !== false;
   return el("div", { class: "detail" }, nameInput, chips,
     el("div", { class: "inline" },
       el("button", { text: inOrder ? "Takes turns, next episode" : "Shuffle: longest wait first", "data-tip": "How this group picks what airs",
         onclick() { remember(); group.mode = inOrder ? "shuffle" : "in_order"; render(); } }),
+      el("button", { id: `overflow-${group.id}`, text: runsOver ? "Runs past its slot" : "Cut off at slot end",
+        "data-tip": runsOver ? "Too long for its slot\nIt loses its commercials, then runs past the end, and the next slot starts late."
+                             : "Too long for its slot\nIt loses its commercials, then gets cut off when the slot ends, so the next slot starts on time.",
+        onclick() { remember(); group.overflow = !runsOver; render(); } }),
       el("button", { text: "Delete", onclick() {
         remember();
         doc.slots = doc.slots.filter(s => s.group !== group.id);
