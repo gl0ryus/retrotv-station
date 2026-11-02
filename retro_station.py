@@ -182,6 +182,8 @@ LAUNCHES = True
 LAUNCH_CHECK_SECONDS = 15
 LAUNCH_BEFORE_SECONDS = 60     # the stream starts this long before liftoff, after the card
 LAUNCH_WATCH_SECONDS = 600     # and stays on this long: to about when the booster lands and the payload reaches orbit
+LAUNCH_START_GRACE_SECONDS = 60     # how long a stream gets to start before it's given up on
+LAUNCH_QUEUE_NEXT_SECONDS = 6       # what follows it is queued this long before it ends
 ALERTS = True
 ALERT_CHECK_SECONDS = 15
 ALERT_CRAWL_MINUTES = 15     # active alerts crawl again this often
@@ -2360,6 +2362,7 @@ class Item:
         self.offset = 0.0       # where in the file the act starts
         self.overlay = None     # overlay_filter() arguments, so a glitch can be added at the last moment
         self.channel = None     # (number, name) for a make-believe channel's show
+        self.ended = threading.Event()   # set for a live launch when it's over (Station._wait_out)
         self.refresh = None     # remakes a card with the latest data just before it's queued (Station._refresh)
 
 
@@ -3668,7 +3671,9 @@ class Station:
         vf, _ = overlay_filter(seconds, bug=True, promo=events.promo(panels, 8.0, PROMO_PANEL_SECONDS))
         if vf:
             options["vf-append"] = vf
-        item = Item(urls[0], float(seconds), "launch", f"LIVE: {launch.get('name')}", options)
+        ended = threading.Event()
+        item = Item(urls[0], float(seconds), "launch", f"LIVE: {launch.get('name')}", options, lambda reason: ended.set())
+        item.ended = ended
         self.launch_live = (launch, item, time.time())
         logger.info(f"Live launch cutting in: {launch.get('name')}, liftoff {launch.get('net')}")
         self.cut_in(events.launch_cut_in(rocket, mission, where, season), follow=item)
@@ -3700,8 +3705,14 @@ class Station:
         self.prev_kind = "card"  # a burst of static as it cuts in
         if not self.emit(self.card(card)):
             return
-        if follow and not self.emit(follow):
-            return
+        if follow:
+            # A live launch eats the time of whatever it cut into: back to wherever the schedule has got to by then
+            if not self.emit(follow):
+                return
+            self._wait_out(follow)
+            if self.player.epoch != self.epoch:
+                return
+            resume = None
         if resume and resume[0] is self.interrupted:
             self.interrupted = None
             show, position = resume
@@ -3816,6 +3827,13 @@ class Station:
         return True
 
     # --- Remote ---
+
+    def _wait_out(self, item):
+        """Waits until an item of no fixed length is nearly over, so what follows starts from the real time."""
+        latest = time.time() + item.duration + LAUNCH_START_GRACE_SECONDS
+        while self.player.epoch == self.epoch and not item.ended.wait(0.5) and time.time() < latest:
+            if item.started and time.time() > item.started + item.duration - LAUNCH_QUEUE_NEXT_SECONDS:
+                break
 
     def remote_launch_test(self, url, seconds):
         """Cuts in with any live stream right now, to check live launches."""
