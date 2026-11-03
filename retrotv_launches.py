@@ -12,6 +12,8 @@ import time
 import urllib.error
 import urllib.request
 
+import retrotv_health as health
+
 logger = logging.getLogger("RetroTV")
 
 API = "https://ll.thespacedevs.com/2.3.0/launches"
@@ -57,11 +59,13 @@ def resolve(url):
                               capture_output=True, text=True, timeout=90)
     except (OSError, subprocess.SubprocessError) as e:
         logger.warning(f"Launch stream: {e}")
+        health.record("streams", False, e)
         return None
     urls = [line.strip() for line in done.stdout.splitlines() if line.strip()]
     if done.returncode or not urls:
         logger.info(f"Launch stream not ready at {url}: {done.stderr.strip()[-120:]}")
         return None
+    health.record("streams", True)
     return urls[:2]
 
 
@@ -137,6 +141,8 @@ class Launches:
                 self.streams[launch["id"]] = found
                 logger.info(f"Launch stream for {launch.get('name')}: {link.get('url')}")
                 return found
+        if liftoff(launch) < now:   # before liftoff, a stream that isn't up yet is normal
+            health.record("streams", False, f"No readable stream at liftoff: {launch.get('name')}")
         return None
 
     def started(self, launch):

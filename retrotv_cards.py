@@ -13,8 +13,6 @@ import os
 import random
 import re
 import time
-import urllib.parse
-import urllib.request
 
 logger = logging.getLogger("RetroTV")
 
@@ -654,45 +652,9 @@ WMO = {
     85: ("Snow Showers", "snow"), 86: ("Snow Showers", "snow"),
     95: ("T'Storms", "storm"), 96: ("T'Storms", "storm"), 99: ("T'Storms", "storm"),
 }
+WEATHER_CRAWL_WIDTH = 0.6          # the crawl's real width, as a share of text_width's estimate (a little under)
+WEATHER_LABEL_SECONDS = 30 * 60    # older than this, the weather card says what time it's from
 COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
-
-
-def fetch_weather(lat, lon, tz, max_age_minutes=10, stale_minutes=60, timeout=8):
-    """Current conditions and a forecast from today on from Open-Meteo, cached on the SD card. The cache only
-    stands in for a fetch while it's under max_age_minutes old and from today (after midnight yesterday's
-    forecast would show yesterday as today), or for up to stale_minutes when the fetch fails. weather() then
-    picks today out by date, so a forecast from late last night still works."""
-    cached = None
-    try:
-        with open(WEATHER_FILE) as f:
-            cached = json.load(f)
-        if (time.time() - cached["fetched"] < max_age_minutes * 60
-                and cached["daily"]["time"][0] == datetime.date.today().isoformat()):
-            return cached
-    except (OSError, ValueError, KeyError, IndexError, TypeError):
-        pass
-    query = urllib.parse.urlencode({
-        "latitude": lat, "longitude": lon, "timezone": tz, "forecast_days": 5,   # today, three more, one spare
-        "temperature_unit": "fahrenheit", "wind_speed_unit": "mph", "precipitation_unit": "inch",
-        "current": "temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,"
-                   "wind_speed_10m,wind_direction_10m,pressure_msl,dew_point_2m",
-        "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
-                 "sunrise,sunset,uv_index_max",
-    })
-    try:
-        with urllib.request.urlopen(f"https://api.open-meteo.com/v1/forecast?{query}", timeout=timeout) as r:
-            data = json.load(r)
-        data["fetched"] = time.time()
-        tmp = WEATHER_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(data, f)
-        os.replace(tmp, WEATHER_FILE)
-        return data
-    except Exception as e:
-        logger.warning(f"Weather fetch failed: {e}")
-    if cached and time.time() - cached.get("fetched", 0) < stale_minutes * 60:
-        return cached
-    return None
 
 
 def _disc(s, start, end, cx, cy, r, color, layer, fade):
@@ -740,10 +702,18 @@ def _icon(s, start, end, kind, x, y, scale=1.0, night=False):
                     fade=fade, layer=5)
 
 
+def weather_as_of(data):
+    """When weather data is from, as a clock time, if it's old enough to need saying; otherwise None."""
+    as_of = data.get("as_of") or data.get("fetched")
+    if as_of and time.time() - as_of > WEATHER_LABEL_SECONDS:
+        return clock(datetime.datetime.fromtimestamp(as_of))
+    return None
+
+
 def weather(data, place, now=None, season=None):
     """Three pages (current conditions, extended forecast, almanac) with a crawl along the bottom. Today is
     the forecast day dated `now` (the time the card airs), never just the first one in the data; None when
-    the data has no forecast for today."""
+    the data has no forecast for today. The backup source has no UV index, so that line is left off."""
     now = now or datetime.datetime.now()
     try:
         cur, daily = data["current"], data["daily"]
@@ -759,7 +729,8 @@ def weather(data, place, now=None, season=None):
         rain_today = daily["precipitation_probability_max"][t]
         sunrise = clock(datetime.datetime.fromisoformat(daily["sunrise"][t]))
         sunset = clock(datetime.datetime.fromisoformat(daily["sunset"][t]))
-        uv = round(daily["uv_index_max"][t])
+        uv = daily["uv_index_max"][t] if "uv_index_max" in daily else None
+        as_of = weather_as_of(data)
     except (KeyError, TypeError, ValueError, IndexError) as e:
         logger.warning(f"Weather data unusable for {now:%a %b %d}: {e!r}")
         return None
@@ -771,7 +742,7 @@ def weather(data, place, now=None, season=None):
     frame_fade = (300, 400)
 
     # The frame (header, panel and crawl bar) stays up the whole time
-    info_header(s, d, [(0, page, "Current Conditions"), (page, 2 * page, "Extended Forecast"),
+    info_header(s, d, [(0, page, f"Conditions at {as_of}" if as_of else "Current Conditions"), (page, 2 * page, "Extended Forecast"),
                        (2 * page, 3 * page, "Almanac")], now, band=HEADER, kicker=f"{CHANNEL} · LOCAL WEATHER",
                 season=season)
     s.shape(0, d, 60, 186, rect(904, 292), PANEL, fade=frame_fade, layer=0)
@@ -819,8 +790,10 @@ def weather(data, place, now=None, season=None):
     a, b = 2 * page, 3 * page
     almanac = [
         ("Sunrise", sunrise), ("Sunset", sunset), ("Today's High", f"{today_hi}°"),
-        ("Tonight's Low", f"{today_lo}°"), ("UV Index", f"{uv}"), ("Chance of Rain", f"{rain_today}%"),
+        ("Tonight's Low", f"{today_lo}°"), ("UV Index", f"{round(uv)}" if uv is not None else None),
+        ("Chance of Rain", f"{rain_today}%"),
     ]
+    almanac = [row for row in almanac if row[1] is not None]
     for i, (label, value) in enumerate(almanac):
         col, row = divmod(i, 3)
         x = 100 + col * 440
@@ -829,13 +802,17 @@ def weather(data, place, now=None, season=None):
         s.text(a, b, x + 380, y, value, BARLOW_X, 42, WHITE, align=6, fade=fade, layer=3)
 
     # The crawl
-    crawl = (f"{place}  ●  Now {temp}°F {cond}  ●  Humidity {humidity}%  ●  Wind {wind}"
+    crawl = (f"{place}  ●  {f'At {as_of}' if as_of else 'Now'} {temp}°F {cond}  ●  Humidity {humidity}%  ●  Wind {wind}"
              f"  ●  Today: High {today_hi}°, Low {today_lo}°  ●  Chance of rain {rain_today}%"
              f"  ●  Sunset {sunset}")
     one = crawl
-    while text_width(crawl, BARLOW_S, 38) < 120.0 * d - 1000:  # round again rather than leave the bar empty
+
+    def crawl_width(text):
+        return text_width(text, BARLOW_S, 38) * WEATHER_CRAWL_WIDTH
+
+    while crawl_width(crawl) < 120.0 * d - 1000:  # round again rather than leave the bar empty
         crawl += "  ●  " + one
-    end_x = min(1000 - 120.0 * d, -text_width(crawl, BARLOW_S, 38))  # the whole line crosses in time
+    end_x = min(1000 - 120.0 * d, -crawl_width(crawl))  # the whole line crosses in time
     s.raw(0, d, f"\\an4\\move(1010,544,{end_x:.0f},544)\\clip(0,488,{W},{H})\\fn{BARLOW_S}\\fs38"
                 f"\\c{WHITE}\\bord0\\shad0\\fad({frame_fade[0]},{frame_fade[1]})", esc(crawl), layer=3)
     return Card(lavfi_url(s.write("weather"), d, music("weather_bed.ogg"), background=WEATHER_BACKGROUND),

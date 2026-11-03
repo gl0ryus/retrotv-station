@@ -21,6 +21,9 @@ import retrotv_meta as meta
 import retrotv_remote as remote
 import retrotv_schedule as schedule
 import retrotv_launches as launches
+import retrotv_health as health
+import retrotv_weather as wx
+import retrotv_art as posters
 import retrotv_alerts as alerts
 import retrotv_blurbs as blurbs
 import retrotv_archive as archive
@@ -44,6 +47,11 @@ CACHE_DIR = os.path.join(HOME_DIR, "retrotv_cache")
 # archive.org's downloads stay on the SD card
 USB_DIR = "/mnt/retrotv_usb"
 USB_SHOWS_DIR = os.path.join(USB_DIR, "shows")
+# Video files the player can't load wait here for a person to look at them, on the drive they were on
+REVIEW_DIRS = {USB_DIR: os.path.join(USB_DIR, "_for_review"), HOME_DIR: os.path.join(HOME_DIR, "_for_review")}
+# What mpv says when the file is at fault. Anything else (no sound device, the player restarting) isn't the file's doing
+BAD_FILE_ERRORS = ("unrecognized file format", "loading failed", "no audio or video data played", "nothing to play")
+MAX_SET_ASIDE_AN_HOUR = 3   # more than this and it's the drive, not the files: they stay where they are
 USB_SHOWS_GB = 105         # of the drive's 114
 USB_WAIT_SECONDS = 30      # at boot the drive can mount a little after the station starts
 TURNS_FILE = os.path.join(HOME_DIR, "retrotv_turns.json")      # group id -> which of its shows takes the next turn
@@ -163,6 +171,7 @@ SPECIALS = {
     "sky": 120,      # Tonight's Sky: the moon, planets and ISS passes over the house, sunset to sign-off
     "teletext": 150, # G|TV Text: teletext pages of tonight's listings, the weather, markets and odd news
     "art": 240,      # Art Break: the day's picture, drawn by Claude, building up shape by shape
+    "marathon": 120, # an ad for the next marathon, its picture scrolling behind the day and start time
 }
 # How far the text bumps go: clean until BLURB_CHEEKY_HOUR, cheeky until BLURB_RAUNCHY_HOUR, raunchy to sign-off
 # (crude, never hateful). Always clean in the kids' dayparts
@@ -191,14 +200,14 @@ ALERT_TEST_HOURS = (10, 19)  # the weekly test airs at a break between shows wit
 # Items a crawl can go over. They all carry per-file vf options, so mpv drops the crawl filter when they end
 CRAWL_KINDS = ("act", "detour", "commercial")
 LOTTERY_HOUR = 23          # the nightly lottery drawing, right before the 11 PM show (None = off)
-# Live scores from ESPN's scoreboard (retrotv_scores.py): while games are on, a SCORES lower third crawls them
+# Live scores from ESPN's scoreboard (retrotv_scores.py): while games are on, a SCORES lower third shows them
 # across a show (not breaks or music videos) every SCORES_MINUTES. The leagues in crawl order, each with the
 # home team whose game leads it in mustard: Bucs, Magic, Lightning, Rays
 SCORES = True
 SCORES_TEAMS = {"nfl": "TB", "nba": "ORL", "nhl": "TB", "mlb": "TB"}
 SCORES_MINUTES = 20
 SCORES_IDLE_MINUTES = 10   # with no games on, look again this often
-SCORES_MAX_SECONDS = 60    # a longer crawl leaves games off the end
+SCORES_MAX_SECONDS = 60    # a longer card leaves games off the end
 SCORES_CHECK_SECONDS = 15
 
 # Time-of-day programming: the first daypart that matches sets the mix, as shares of airtime (a pick's
@@ -342,7 +351,7 @@ STRETCH_MAX = 1.45
 STAGE_W, STAGE_H = 512, 300   # mpv.conf's square-pixel 300-line stage (the cards render at this size too)
 SNIPE_SECONDS = 30         # a "NEXT: ..." lower third for the last seconds of a show (0 = off)
 PROMO_AT = 8.0             # seconds into a show for the NEXT / LATER / TONIGHT lower third (0 = off)
-PROMO_PANEL_SECONDS = 4.5
+PROMO_PANEL_SECONDS = 8.0   # long enough to take in the clip that goes with each
 TONIGHT_HOUR = 20          # TONIGHT names the show planned for this hour, until shows near it
 # The day's anniversary episode (picked by retrotv_news.py: first aired on this date years ago) goes next in
 # line at the first show from this hour on that its rating allows, after a From the Vault card
@@ -891,6 +900,8 @@ class CacheManager:
         self.last_refill = 0
         self.music_refill_day = None
         self.wanted = set()   # what the schedule airs soon: never evicted to make room
+        self.bad_files = health.BadFiles()
+        self.blocked = self.bad_files.blocked()   # files set aside for review: not copied back, not aired
         self.item_files, self.item_stamp = {}, None   # schedule item -> its files in airing order, per NAS index
         self.schedule = schedule.load()
         try:
@@ -1121,7 +1132,7 @@ class CacheManager:
                         write_json(SERIES_FILE, self.series_pos)
                     except OSError as err:
                         logger.error(f"Could not save series positions: {err}")
-                if e.get("archive"):
+                if e.get("archive") and not e.get("held"):
                     # archive.org's downloads go once they've aired, and the archive worker fetches another
                     del self.entries[src]
                     self._remove_file(e)
@@ -1221,6 +1232,8 @@ class CacheManager:
         files = self._episodes(item, when)
         with self.lock:
             for src in files:
+                if src in self.blocked:
+                    continue   # waiting for review: the show carries on with its next episode
                 tag = holiday_tag(src)
                 if not tag:
                     if self._is_new(src):
@@ -1274,7 +1287,7 @@ class CacheManager:
         """A shuffle group's files, whatever has waited longest first, the same way every time."""
         season = holiday_season(when.date())
         files = {src for item in items for src in self._episodes(item, when)
-                 if holiday_tag(src) in (None, season)}
+                 if holiday_tag(src) in (None, season) and src not in self.blocked}
         with self.lock:
             aired = dict(self.aired)
         return sorted(files, key=lambda s: (aired.get(s, 0), hashlib.sha1(s.encode()).hexdigest()))
@@ -1531,6 +1544,8 @@ class CacheManager:
 
     def _fetch_into_pool(self, src, pool, force=False):
         """Copies src if it fits the pool. True when copied, False when skipped, None when the SD card is full."""
+        if src in self.blocked:
+            return False
         category = "commercials" if pool == "commercials" else self.indexer.category_of(src)
         if not category:
             return False
@@ -1621,6 +1636,68 @@ class CacheManager:
             os.remove(cache_path(e))
         except OSError as err:
             logger.error(f"Error deleting {e['file']}: {err}")
+
+    def set_aside(self, path, label, error):
+        """The player couldn't load a file. It's logged and moved to _for_review, never deleted, and stays off the air
+        until it's cleared on the health page. A file that's simply gone is only logged. The copy on the NAS isn't touched:
+        the Pi can't write there, and it may be seeding."""
+        if error not in BAD_FILE_ERRORS or not path.startswith("/"):
+            return
+        moved_id = dest = None
+        with self.lock:
+            src = next((s for s, e in self.entries.items() if cache_path(e) == path), None)
+            if src is None:
+                # A later act of a file already dealt with, or one that isn't in the cache at all (a bumper, say)
+                if not path.startswith((CACHE_DIR + "/", USB_SHOWS_DIR + "/")):
+                    self.bad_files.add(path, label, error, "left", original=path)
+                return
+            e = self.entries[src]
+            original = f"https://archive.org/details/{e['item']}" if e.get("item") else src
+            if not os.path.exists(path):
+                del self.entries[src]
+                self.bad_files.add(src, label, error, "missing", original=original)
+            elif self.bad_files.moved_since(time.time() - 3600) >= MAX_SET_ASIDE_AN_HOUR:
+                e["held"] = True
+                self.bad_files.add(src, label, error, "held", original=original)
+                logger.error(f"Too many bad files this hour, is the drive all right? Left in place: {path}")
+            else:
+                folder = REVIEW_DIRS[USB_DIR if path.startswith(USB_DIR + "/") else HOME_DIR]
+                dest = os.path.join(folder, os.path.basename(path))
+                try:
+                    os.makedirs(folder, exist_ok=True)
+                    os.rename(path, dest)
+                except OSError as err:
+                    e["held"] = True
+                    dest = None
+                    self.bad_files.add(src, label, f"{error}; could not move it: {err}", "held", original=original)
+                    logger.error(f"Could not move a bad file to _for_review: {path}: {err}")
+                else:
+                    del self.entries[src]
+                    self.blocked.add(src)
+                    moved_id = self.bad_files.add(src, label, error, "moved", original=original, moved_to=dest)
+                    logger.error(f"Bad file moved to {dest}: {error}")
+            if e.get("archive"):
+                self.archive_wake.set()
+        self._save_manifest()
+        if moved_id:
+            threading.Thread(target=self._probe_bad_file, args=(moved_id, dest), daemon=True).start()
+
+    def _probe_bad_file(self, record_id, path):
+        """A second opinion on a file the player refused, for whoever reviews it."""
+        try:
+            done = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path],
+                                  capture_output=True, text=True, timeout=60)
+            problem = done.stderr.strip()[-160:]
+            self.bad_files.note_probe(record_id, f"ffprobe can't read it either: {problem}" if done.returncode or problem
+                                      else f"ffprobe reads it fine ({float(done.stdout) / 60:.0f} min), so it may have been a one-off")
+        except (OSError, ValueError, subprocess.SubprocessError) as err:
+            self.bad_files.note_probe(record_id, f"Couldn't check it: {err}")
+
+    def clear_bad_file(self, record_id):
+        src = self.bad_files.clear(record_id)
+        with self.lock:
+            self.blocked = self.bad_files.blocked()
+        return src
 
     def _folder_for(self, category):
         return USB_SHOWS_DIR if self.usb and category in MAIN_CATEGORIES else CACHE_DIR
@@ -1714,7 +1791,7 @@ class CacheManager:
             return False
         src = os.path.join(ARCHIVE_ROOT, *got["path"].split("/"))
         tag = holiday_tag(src)
-        if tag and tag != holiday_ahead(datetime.date.today()):
+        if src in self.blocked or (tag and tag != holiday_ahead(datetime.date.today())):
             return True   # passed over: try another
         with self.lock:
             used = sum(e["size"] for e in self.entries.values() if e.get("archive"))
@@ -2370,9 +2447,10 @@ class Player:
     """Feeds a long-running mpv over its JSON IPC socket, one item ahead so playback is gapless."""
     AHEAD = 2  # the playing item plus one queued
 
-    def __init__(self):
+    def __init__(self, on_failed=None):
         self.cv = threading.Condition()
         self.send_lock = threading.Lock()
+        self.on_failed = on_failed  # (url, label, error): called when an item fails, before its on_end
         self.pending = {}      # playlist entry id -> Item, in queue order
         self.ended = {}        # end-file events that beat their loadfile reply
         self.started = {}      # start-file events that beat their loadfile reply
@@ -2446,13 +2524,18 @@ class Player:
                 self.alive = False
             self.cv.notify_all()
 
-    @staticmethod
-    def _finish(finished):
+    def _finish(self, finished):
         while finished:
             item, msg = finished.pop(0)
             reason = msg.get("reason", "error")
             if reason == "error":
-                logger.error(f"Player failed on {item.label}: {msg.get('file_error', 'unknown error')}")
+                error = msg.get("file_error", "unknown error")
+                logger.error(f"Player failed on {item.label}: {error}")
+                if self.on_failed:
+                    try:
+                        self.on_failed(item.url, item.label, error)
+                    except Exception as e:
+                        logger.error(f"Error after {item.label} failed: {e}")
             if item.on_end:
                 try:
                     item.on_end(reason)
@@ -2609,6 +2692,14 @@ class Player:
 
 # --- Station ---
 
+ART_X, ART_BOTTOM, ART_SLIDE = 14, 153, 260   # a lower third's poster: above the label, resting on the bar (342x200)
+ART_CHECK_MINUTES = 30
+CLIP_GAP_SECONDS = 20          # between cutting one clip and the next, so they stay in the background
+CLIP_IDLE_SECONDS = 120
+CLIP_RETRY_SECONDS = 86400
+CLIP_PRUNE_SECONDS = 3600
+
+
 def glitch_filters(t0, kind):
     """About a second of bad reception at file time t0: a tracking roll, an interference burst or tearing."""
     t1 = t0 + 1.0
@@ -2633,10 +2724,11 @@ def glitch_filters(t0, kind):
     return ",".join(video), ",".join(audio)
 
 
-def overlay_filter(duration, bug, snipe=None, glitch=None, promo=None, popups=None):
+def overlay_filter(duration, bug, snipe=None, glitch=None, promo=None, popups=None, art: list | None = None):
     """
     Per-file filters added after the CRT crunch (342x200): the logo bug, the progress line, the
     NEXT / LATER / TONIGHT promo, the "NEXT" lower third, Pop-Up Video bubbles and a reception glitch.
+    art: posters that sit on those lower thirds, [(file, from, to, slides in with the bar)] in file time.
     Returns (vf-append, af-append); either may be None.
     """
     graph, sources, cur, n = [], [], "in", 0
@@ -2659,6 +2751,14 @@ def overlay_filter(duration, bug, snipe=None, glitch=None, promo=None, popups=No
     for script in (popups, promo, snipe):
         if script:
             stage(f"ass=filename={script}:fontsdir={cards.FONTS_DIR}")
+    for i, (path, start, end, slides) in enumerate(art or ()):
+        # A clip is timed to start with its panel and stops being decoded when the panel ends
+        sources.append(f"movie={path}:loop=0,setpts=N/({posters.CLIP_FPS}*TB)+{start:.2f}/TB,trim=end={end:.2f}[art{i}]"
+                       if path.endswith(".mp4") else f"movie={path}[art{i}]")
+        x = str(ART_X)
+        if slides:   # keeps pace with the bar's slide in (events: 450 ms from off the left edge)
+            x = f"'{ART_X}-(1-min(1,(t-{start:.2f})/0.45))*{ART_SLIDE}'"
+        stage(f"overlay=x={x}:y={ART_BOTTOM}-h:eval=frame:enable='between(t,{start:.2f},{end:.2f})'", f"[art{i}]")
     audio = None
     if glitch:
         video, audio = glitch_filters(*glitch)
@@ -3225,23 +3325,23 @@ class Station:
                 self.special_last[kind] = self.last_special = now
                 item = self.card(card)
                 if kind in FRESH_SPECIALS:
-                    item.refresh = lambda kind=kind: self.build_special(kind, self.eta(), first_start, fresh=True)
+                    item.refresh = lambda kind=kind: self.build_special(kind, self.eta(), first_start)
                 return item
             self.special_last[kind] = now - SPECIALS[kind] * 60 + 900  # no data right now, try again in 15 min
         return None
 
-    def build_special(self, kind, airs_at, first_start, fresh=False):
-        """A special screen for airs_at, or None without data. fresh: made just before it's queued, so the
-        data is fetched again unless it's very recent, with less time to wait for it (see _refresh)."""
+    def build_special(self, kind, airs_at, first_start):
+        """A special screen for airs_at, or None without data."""
         season, month = holiday_look(airs_at.date()), heritage_month(airs_at.date())
         if kind == "guide":
             return cards.guide(self.guide_rows(first_start), airs_at, season)
         if kind == "weather":
             if WEATHER_LAT is None:
                 return None
-            data = (cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ, max_age_minutes=2, timeout=4) if fresh
-                    else cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ))
+            data = wx.load()
             return cards.weather(data, WEATHER_PLACE, airs_at, season) if data else None
+        if kind == "marathon":
+            return self.marathon_ad(airs_at, season)
         if kind == "quiz":
             return screens.pop_quiz(season, month)
         if kind == "history":
@@ -3257,8 +3357,7 @@ class Station:
         if kind == "art":
             return screens.art_break(airs_at, season)
         if kind == "teletext":
-            data = (cards.fetch_weather(WEATHER_LAT, WEATHER_LON, WEATHER_TZ) if WEATHER_LAT is not None
-                    else None)
+            data = wx.load() if WEATHER_LAT is not None else None
             # The show on now and the lineup as planned: unlike guide_rows, this works in a mid-show break too
             listings = [(round_time(s.start), s.name, s.episode)
                         for s in [self.current_show] + self.lineup.snapshot() if s and s.start]
@@ -3319,11 +3418,12 @@ class Station:
             if i == first and SHOW_TITLE_SECONDS:
                 options["osd-playing-msg"] = osd_msg(show.osd_title())
                 options["osd-playing-msg-duration"] = SHOW_TITLE_SECONDS * 1000
-            overlay = dict(duration=show.duration, bug=True)
+            overlay: dict = dict(duration=show.duration, bug=True)
             if i == first and not join and PROMO_AT and bounds[i + 1] - begin > PROMO_AT + 3 * PROMO_PANEL_SECONDS + 15:
-                overlay["promo"] = self.promo(show, begin + PROMO_AT)
+                overlay["promo"], overlay["art"] = self.promo(show, begin + PROMO_AT)
             if last and SNIPE_SECONDS and show.duration - begin > SNIPE_SECONDS + 15:
-                overlay["snipe"] = self.snipe(show)
+                overlay["snipe"], art = self.snipe(show)
+                overlay["art"] = overlay.get("art", []) + art
             vf, _ = overlay_filter(**overlay)
             if vf:
                 options["vf-append"] = vf
@@ -3389,12 +3489,12 @@ class Station:
             options = {"force-media-title": f"{artist} - {song}" if artist else song}
             if begin:
                 options["start"] = begin
-            overlay = dict(duration=duration, bug=True)
+            overlay: dict = dict(duration=duration, bug=True)
             if duration - begin > MUSIC_TITLE_AT + 2 * MUSIC_TITLE_SECONDS + 5:
                 panels = ([("Now", artist)] if artist else []) + [(str(year) if year else "Video", song)]
                 overlay["promo"] = events.promo(panels, begin + MUSIC_TITLE_AT, MUSIC_TITLE_SECONDS)
             if i == last and SNIPE_SECONDS and duration - begin > SNIPE_SECONDS + 15:
-                overlay["snipe"] = self.snipe(block, duration)
+                overlay["snipe"], overlay["art"] = self.snipe(block, duration)
             popped = facts.get(meta.popup_key(artist, song)) if artist else None
             if popped:
                 overlay["popups"] = events.popups(popped["facts"], duration, begin)
@@ -3558,15 +3658,18 @@ class Station:
         that isn't the whole show (a music block's last video)."""
         upcoming = self.lineup.upcoming(show.end)
         if not upcoming or upcoming[0].sign_off_before:
-            return None
+            return None, []
         nxt = upcoming[0]
         name = "More " + nxt.name if nxt.marathon and nxt.name == show.name else nxt.name
         end = length or show.duration
-        return events.snipe(name, end - SNIPE_SECONDS, end - 2)
+        picture = self.picture_of(nxt, show.end)
+        art = [(picture, end - SNIPE_SECONDS, end - 2.3, True)] if picture else []
+        return events.snipe(name, end - SNIPE_SECONDS, end - 2), art
 
     def promo(self, show, at):
         """The lower third early in a show: NEXT, then LATER (the next different show) and TONIGHT
-        (what's planned for TONIGHT_HOUR) with their times. None when the station signs off next."""
+        (what's planned for TONIGHT_HOUR) with their times, and the posters that go with them. None, [] when the
+        station signs off next."""
         tonight = datetime.datetime.combine(show.start.date(), datetime.time(TONIGHT_HOUR))
         if not (SIGN_ON_HOUR <= show.start.hour and show.end < tonight):
             tonight = None
@@ -3574,23 +3677,173 @@ class Station:
             self.lineup.plan(show.end, until=tonight + td(minutes=SLOT_MINUTES))
         upcoming = [s for s in self.lineup.upcoming(show.end)]
         if not upcoming or upcoming[0].sign_off_before:
-            return None
+            return None, []
         nxt = upcoming[0]
         panels = [("Next", "More " + nxt.name if nxt.marathon and nxt.name == show.name else nxt.name)]
+        targets = [nxt]
         # LATER skips more episodes of the same series ("X-Play", then "X-play" again)
         later = next((s for s in upcoming[1:] if s.name.lower() != nxt.name.lower() or s.sign_off_before), None)
         if later and later.sign_off_before:
             later = None
         if later:
             panels.append(("Later", f"{later.name} · {cards.clock(later.start)}"))
+            targets.append(later)
         if tonight:
             prime = next((s for s in upcoming if s.start and s.start >= tonight), None)
             if prime and prime.start < tonight + td(minutes=SLOT_MINUTES) and not prime.sign_off_before \
                     and prime is not nxt and prime is not later:
                 name = f"{prime.name} Marathon" if prime.marathon_intro else prime.name
                 panels.append(("Tonight", f"{name} · {cards.clock(prime.start)}"))
+                targets.append(prime)
         logger.info("Promo: " + " / ".join(f"{label.upper()} {name}" for label, name in panels))
-        return events.promo(panels, at, PROMO_PANEL_SECONDS)
+        art = []
+        for i, target in enumerate(targets):
+            picture = self.picture_of(target, show.start)
+            if picture:
+                ends = at + (i + 1) * PROMO_PANEL_SECONDS
+                art.append((picture, at + i * PROMO_PANEL_SECONDS, ends - (0.3 if i == len(targets) - 1 else 0.05), i == 0))
+        return events.promo(panels, at, PROMO_PANEL_SECONDS), art
+
+    # --- Show art, clips and the marathon ad ---
+
+    @staticmethod
+    def picture_of(show, airing):
+        """What goes on a lower third for a show: its clip if it has one that standards allow at the time it would air,
+        otherwise its poster, or None. Never touches the network, or cuts anything."""
+        src = getattr(show, "src", None)
+        if src and not isinstance(show, MusicBlock):
+            clip = posters.clip_file(src)
+            if os.path.exists(clip) and allowed(src, broadcast_hour(airing)[1]):
+                return clip
+        return posters.thumb(show.name)
+
+    def watch_clips(self):
+        """Background thread: cuts the clips, one at a time, of what's planned first and then what the schedule wants."""
+        tried, pruned = {}, time.time()
+        while True:
+            wait = CLIP_IDLE_SECONDS
+            try:
+                wanted = self.clips_wanted()
+                if self.cut_a_clip(wanted, tried):
+                    wait = CLIP_GAP_SECONDS
+                if time.time() - pruned > CLIP_PRUNE_SECONDS:
+                    pruned = time.time()
+                    posters.prune_clips({posters.clip_file(src) for src in wanted})
+            except Exception:
+                logger.exception("Clip cutting failed")
+            time.sleep(wait)
+
+    def clips_wanted(self):
+        planned = [s.src for s in self.lineup.snapshot() if not isinstance(s, MusicBlock)]
+        return list(dict.fromkeys(planned + sorted(self.cache.wanted)))
+
+    def cut_a_clip(self, wanted, tried):
+        """Cuts the first clip that's wanted and missing, if its episode is on the Pi. True if it tried one."""
+        for src in wanted:
+            e = self.cache.entry(src)
+            dest = posters.clip_file(src)
+            if not e or not e.get("duration") or os.path.exists(dest) or time.time() - tried.get(src, 0) < CLIP_RETRY_SECONDS:
+                continue
+            tried[src] = time.time()
+            try:
+                if posters.make_clip(cache_path(e), e["duration"], dest):
+                    health.record("clips", True)
+                    logger.info(f"Clip cut: {os.path.basename(src)}")
+                else:
+                    logger.info(f"No clip to be had from {os.path.basename(src)}")
+            except (OSError, subprocess.SubprocessError) as err:
+                health.record("clips", False, f"{os.path.basename(src)}: {err}")
+                logger.warning(f"Could not cut a clip from {os.path.basename(src)}: {err}")
+            return True
+        return False
+
+    def watch_art(self):
+        """Background thread: keeps the posters ahead of what's coming up."""
+        while True:
+            try:
+                found = posters.refresh(self.art_wanted())
+                if found:
+                    logger.info(f"Show art: {found} new pictures")
+            except Exception:
+                logger.exception("Show art refresh failed")
+            time.sleep(ART_CHECK_MINUTES * 60)
+
+    def art_wanted(self):
+        """[(title, category, year, needs the large picture)]: the marathons, what's on the schedule, then what's planned."""
+        wanted = {}
+        indexer = self.cache.indexer
+
+        def add(src, big=False):
+            category = indexer.category_of(src) or "videos"
+            title = cards.parse_title(src, category, MEDIA_ROOT)[0]
+            if title not in wanted or big:
+                series, order = indexer.info(src)
+                wanted[title] = (title, category, meta.era_year(src, category, series, order), big)
+        for key in MARATHON_SERIES:
+            episodes = indexer.episodes(key)
+            if episodes:
+                add(episodes[0][1], True)
+        now = datetime.datetime.now()
+        for group in self.cache.schedule["groups"]:
+            for item in group["items"]:
+                if item.startswith(("shows/", "g4/")):
+                    files = self.cache._episodes(item, now)
+                    if files:
+                        add(files[0])
+        for show in self.lineup.snapshot():
+            if not isinstance(show, MusicBlock) and show.name not in wanted:
+                wanted[show.name] = (show.name, show.category, show.year, False)
+        return list(wanted.values())
+
+    def next_marathon(self, now):
+        """(when it starts, its title) for the next marathon on the schedule, or None."""
+        sched = self.cache.schedule
+        today = broadcast_date(now)
+        groups = {g["id"] for g in sched["groups"] if "marathon:" in g["items"]}
+        for offset in range(8):
+            day = today + td(days=offset)
+            base = datetime.datetime.combine(day, datetime.time())
+            starts = sorted(base + td(hours=s["start"]) for s in sched["slots"] if s["group"] in groups and s["day"] == day.weekday())
+            for start in starts:
+                key = marathon_series(day, self.cache.indexer)
+                episodes = self.cache.indexer.episodes(key) if key and start > now else None
+                if episodes:
+                    src = episodes[0][1]
+                    return start, cards.parse_title(src, self.cache.indexer.category_of(src) or "videos", MEDIA_ROOT)[0]
+        return None
+
+    def marathon_ad(self, airs_at, season):
+        found = self.next_marathon(airs_at)
+        if not found:
+            return None
+        start, name = found
+        image = posters.wide(name)
+        if not image:
+            return None
+        days = (broadcast_date(start) - broadcast_date(airs_at)).days
+        when = {0: "Today", 1: "Tomorrow", 7: f"Next {start:%A}"}.get(days, f"This {start:%A}")
+        logger.info(f"Marathon ad: {name}, {when} at {cards.clock(start)}")
+        return events.marathon_ad(image, name, when, cards.clock(start), season)
+
+    def remote_special_soon(self, kind):
+        """Makes a special screen due at the next break, to see it without waiting."""
+        if kind not in SPECIALS:
+            return f"No special called {kind or 'that'}."
+        self.special_last[kind] = self.last_special = 0.0
+        return f"The {kind} screen is up at the next break that has room for it."
+
+    # --- Local weather ---
+
+    def watch_weather(self):
+        """Background thread: keeps the saved weather current, whatever is on the air."""
+        watcher = wx.Watcher(WEATHER_LAT, WEATHER_LON, WEATHER_TZ)
+        while True:
+            try:
+                wait = watcher.step()
+            except Exception:
+                logger.exception("Weather refresh failed")
+                wait = wx.RETRY_SECONDS[-1]
+            time.sleep(wait)
 
     # --- Emergency alerts ---
 
@@ -3811,7 +4064,7 @@ class Station:
         return item, earliest, latest
 
     def air_scores(self, games):
-        """Lays the score crawl over the show that's playing, if it fits in the window."""
+        """Lays the score card over the show that's playing, if it fits in the window."""
         window = self._score_window()
         position = self.player.position()
         if not window or position is None:
@@ -3821,10 +4074,25 @@ class Station:
         shown, d = scores.fit(games, SCORES_MAX_SECONDS)
         if start < earliest or start + d > latest:
             return False
-        script = scores.ticker_script(shown, start)
-        self.player.add_filter("vf", f"@scores:lavfi=[ass=filename={script}:fontsdir={cards.FONTS_DIR}]")
-        logger.info(f"Scores ({d:.0f}s, {len(shown)} of {len(games)} live games) over {item.label}")
+        logos = scores.logos_for(shown)   # the first time a team comes up, this takes a moment
+        position = self.player.position()
+        if position is None or self.player.current() is not item:
+            return False
+        start = position + 0.8
+        if start < earliest or start + d > latest:
+            return False
+        self.player.add_filter("vf", "@scores:" + scores.board_filter(shown, start, logos))
+        logger.info(f"Scores ({d:.0f}s, {len(shown)} of {len(games)} games, {len(logos)} logos) over {item.label}")
         return True
+
+    def remote_scores_test(self):
+        """Puts the score card on now, with today's games if none are live, to check how it looks."""
+        if not self.scores or not self.on_air:
+            return "The score card can't run right now."
+        games = self.scores.live() or self.scores.today()
+        if not games:
+            return "There are no games on the scoreboards today."
+        return "Score card is on." if self.air_scores(games) else "It needs a show on, clear of its promo and the NEXT card."
 
     # --- Remote ---
 
@@ -3897,6 +4165,24 @@ class Station:
 
     def remote_guide(self):
         return self.channels.guide()
+
+    def remote_health(self):
+        now = datetime.datetime.now()
+        item = self.player.current()
+        if item:
+            on_air = "ok", f"Playing {item.label}"
+        elif self.on_air:
+            on_air = "warn", "On the air, but nothing is playing at this moment"
+        elif off_air(now):
+            on_air = "idle", "Signed off for the night"
+        else:
+            on_air = "warn", "Not on the air"
+        disks = (("sd", "SD card", CACHE_DIR, False), ("usb", "USB drive", USB_DIR, True))
+        return health.report(self.on_air, on_air, MEDIA_ROOT, disks, MIN_FREE_GB, self.cache.bad_files)
+
+    def remote_clear_bad_file(self, record_id):
+        src = self.cache.clear_bad_file(record_id)
+        return f"{os.path.basename(src)} can air again." if src else "That file isn't on the list."
 
     def remote_tune(self, number, src):
         """Changes to a make-believe channel's show; the set comes back to the main channel after it."""
@@ -4000,6 +4286,7 @@ class Station:
 
 def main():
     logger.info("Retro TV Station Starting Up...")
+    health.install("station")
 
     # 1. Initialize Indexer (reads the SD card copy; only touches the NAS on a first run)
     indexer = MediaIndexer()
@@ -4010,11 +4297,15 @@ def main():
     # 3. Plan, then play forever: station ID or bumper, the show in acts with commercial breaks
     #    between them, then a break with the occasional guide or weather and an "Up Next" card
     lineup = Lineup(cache_manager)
-    player = Player()
+    player = Player(cache_manager.set_aside)
     station = Station(cache_manager, lineup, player)
     remote.start(station, REMOTE_PORT)
     if LAUNCHES:
         threading.Thread(target=station.watch_launches, daemon=True).start()
+    threading.Thread(target=station.watch_art, daemon=True).start()
+    threading.Thread(target=station.watch_clips, daemon=True).start()
+    if WEATHER_LAT is not None:
+        threading.Thread(target=station.watch_weather, daemon=True).start()
     if station.alerts:
         threading.Thread(target=station.watch_alerts, daemon=True).start()
     if station.scores:

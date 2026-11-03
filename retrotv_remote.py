@@ -17,6 +17,7 @@ logger = logging.getLogger("RetroTV")
 
 PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrotv_remote.html")
 SCHEDULE_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrotv_schedule.html")
+HEALTH_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrotv_health.html")
 MAX_BODY = 65536
 MAX_SCHEDULE_BODY = 1024 * 1024
 FONT_FILES = ("ArchivoBlack-Regular.ttf", "BarlowCondensed-Bold.ttf", "BarlowCondensed-ExtraBold.ttf",
@@ -27,6 +28,7 @@ class Handler(BaseHTTPRequestHandler):
     station = None
     page = b""
     schedule_page = b""
+    health_page = b""
     fonts = {}
 
     def log_message(self, *args):
@@ -56,6 +58,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, self.page, "text/html; charset=utf-8")
             elif url.path == "/schedule":
                 self._send(200, self.schedule_page, "text/html; charset=utf-8")
+            elif url.path == "/health":
+                self._send(200, self.health_page, "text/html; charset=utf-8")
+            elif url.path == "/api/health":
+                self._send(200, self.station.remote_health())
             elif url.path == "/api/library":
                 self._send(200, self.station.remote_library())
             elif url.path == "/api/schedule":
@@ -106,6 +112,13 @@ class Handler(BaseHTTPRequestHandler):
             elif url.path == "/api/launch_test":
                 query = urllib.parse.parse_qs(url.query)
                 message = self.station.remote_launch_test(query.get("url", [""])[0], int(query.get("seconds", ["60"])[0]))
+            elif url.path == "/api/bad_file/clear":
+                message = self.station.remote_clear_bad_file(str(body.get("id", "")))
+            elif url.path == "/api/scores_test":
+                message = self.station.remote_scores_test()
+            elif url.path == "/api/special_soon":
+                kind = urllib.parse.parse_qs(url.query).get("kind", [""])[0] or str(body.get("kind", ""))
+                message = self.station.remote_special_soon(kind)
             elif url.path == "/api/rescan":
                 message = self.station.remote_rescan()
             elif url.path == "/api/alert_test":
@@ -136,6 +149,12 @@ def start(station, port):
     except OSError as e:
         logger.error(f"Schedule page missing: {e}")
         Handler.schedule_page = b"<p>Schedule page missing.</p>"
+    try:
+        with open(HEALTH_PAGE_FILE, "rb") as f:
+            Handler.health_page = f.read()
+    except OSError as e:
+        logger.error(f"Health page missing: {e}")
+        Handler.health_page = b"<p>Health page missing.</p>"
     for name in FONT_FILES:
         try:
             with open(os.path.join(FONTS_DIR, name), "rb") as f:

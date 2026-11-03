@@ -39,6 +39,7 @@ LOTTERY_BONUS = 46.0
 NEW_YEAR_SECONDS = 80.0
 NEW_YEAR_MIDNIGHT = 60.0   # where midnight falls in the countdown
 MARATHON_SECONDS = 6.0
+MARATHON_AD_SECONDS = 15.0
 LAUNCH_SECONDS = 5.0
 ID_SECONDS = 4.5
 GREETING = "FROM ALL OF US AT GL0RYUS"   # the holiday IDs' sign-off line (the network's name, shortened to fit)
@@ -321,6 +322,25 @@ def marathon(name, series_name, start, season=None):
     else:
         s.text(1.0, d, 512, 492, f"BACK TO BACK STARTING NOW · {clock(start)}", BARLOW_S, 38, lk.accent, spacing=4)
     return Card(cards.lavfi_url(s.write("marathon"), d, music("marathon_sting.ogg"), background=lk.bg), d, "card")
+
+
+def marathon_ad(image, name, when, start_time, season=None):
+    """An ad for the next marathon: its picture scrolling slowly behind "THIS FRIDAY / NAME / BACK TO BACK FROM 4:30 PM"."""
+    d = MARATHON_AD_SECONDS
+    lk = look(season)
+    s = Script()
+    fade = (500, 500)
+    s.shape(0, d, 0, 372, rect(W, H - 372), "&H00100C08&", fade=fade, layer=1, extra="\\1a&H38&")
+    s.shape(0, d, 0, 368, rect(W, 5), MUSTARD, fade=fade, layer=2)
+    s.text(0.3, d, 512, 408, when.upper(), BARLOW_X, 50, MUSTARD, spacing=6, shadow=2, fade=fade, layer=3)
+    name = clip_text(name.upper(), 26)
+    s.text(0.5, d, 512, 470, name, ARCHIVO, fit(name, ARCHIVO, 66, 900), lk.headline, shadow=4, shadow_color=lk.shadow, fade=fade, layer=3)
+    s.text(0.8, d, 512, 538, f"BACK TO BACK FROM {start_time}", BARLOW_X, 44, CREAM, spacing=3, shadow=2, fade=fade, layer=3)
+    frames = int(d * 30)
+    video = (f"movie=filename={image},loop=loop=-1:size=1:start=0,setpts=N/(30*TB),trim=duration={d:.2f},format=rgb24,"
+             f"crop={RENDER.replace('x', ':')}:x='(iw-ow)*min(1,n/{frames})':y='(ih-oh)*min(1,n/{frames})',setsar=1,"
+             f"ass=filename={s.write('marathon-ad')}:fontsdir={FONTS_DIR},fade=t=in:st=0:d=0.4,fade=t=out:st={d - 0.5:.2f}:d=0.5,format=yuv420p")
+    return Card(_url(video, _audio(music("guide_bed.ogg"), d)), d, "card")
 
 
 # --- Snipe ---

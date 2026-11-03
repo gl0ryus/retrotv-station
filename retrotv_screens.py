@@ -17,7 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from retrotv_cards import (
+from retrotv_cards import (weather_as_of, 
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, SHADOW_RED, SKY, W, WHITE,
     YELLOW, ASSETS_DIR, CHANNEL, WMO, Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look,
     music, rect, text_width,
@@ -1005,11 +1005,11 @@ def _tt_wrap(text, width):
     return lines + ([line] if line else [])
 
 
-def _tt_index(place):
+def _tt_index(place, weather=True):
     page = TeletextPage(100, "G|TV TEXT", "blue")
     page.put(4, 1, f"{place or 'Your'}'s own teletext service"[:38], "cyan")
-    for i, (name, number, colour) in enumerate((("TONIGHT ON G|TV", 401, "red"), ("WEATHER", 302, "blue"),
-                                                ("MARKETS", 220, "green"), ("ODD NEWS", 555, "magenta"))):
+    listed = (("TONIGHT ON G|TV", 401, "red"), ("WEATHER", 302, "blue"), ("MARKETS", 220, "green"), ("ODD NEWS", 555, "magenta"))
+    for i, (name, number, colour) in enumerate(entry for entry in listed if weather or entry[1] != 302):
         row = 7 + i * 2
         page.put(row, 2, " ", colour, colour)
         page.put(row, 4, name.ljust(31, "."), "white")
@@ -1048,7 +1048,10 @@ def _tt_weather(data, place, now):
         page.put(5, 1, "Weather is not available", "white")
         return page
     page.put(4, 1, (place or "").upper(), "cyan")
-    page.put(6, 1, "NOW", "yellow")
+    as_of = weather_as_of(data)
+    if as_of:
+        page.put(5, 1, f"AS OF {as_of}".upper(), "yellow")
+    page.put(6, 1, "NOW" if not as_of else "THEN", "yellow")
     page.put(6, 6, f"{round(cur['temperature_2m'])}F", "white", double=True)
     page.put(6, 12, WMO.get(cur["weather_code"], ("",))[0].upper(), "white", double=True)
     page.put(9, 1, f"HUMIDITY {round(cur['relative_humidity_2m'])}%   WIND {round(cur['wind_speed_10m'])} MPH",
@@ -1104,9 +1107,10 @@ def _tt_news(headlines):
 
 def teletext(now, weather, place, listings, headlines, season=None):
     """G|TV Text: a teletext service flipping through its pages (index, tonight's listings, weather, markets
-    and the odd news headlines), each with the rolling page header and a ticking clock."""
-    pages = [_tt_index(place), _tt_tonight(listings), _tt_weather(weather, place, now), _tt_markets(),
-             _tt_news(headlines)]
+    and the odd news headlines), each with the rolling page header and a ticking clock. Without weather to show,
+    its page is left out rather than saying so on the air."""
+    pages = [_tt_index(place, bool(weather)), _tt_tonight(listings)] + ([_tt_weather(weather, place, now)] if weather else [])
+    pages += [_tt_markets(), _tt_news(headlines)]
     d = round(len(pages) * TT_PAGE_SECONDS, 2)
     s = Script()
     for i, page in enumerate(pages):
