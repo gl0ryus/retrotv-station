@@ -55,6 +55,29 @@ def offline():
             module.get_json = refuse
 
 
+# Where the station's names live, searched in this order by everything()
+STATION_PARTS = ("station", "config", "rules", "cache", "lineup", "player", "overlays", "channels")
+
+
+def everything():
+    """One view of the station's modules, for tests written when they were one file: reading rs.NAME finds it in
+    whichever module has it, and setting rs.NAME = value sets it in every module that has a copy, so the code that
+    uses it sees it wherever that code lives."""
+    import importlib
+    parts = [importlib.import_module(f"retrotv.{name}") for name in STATION_PARTS]
+
+    class Everything:
+        def __getattr__(self, name):
+            for part in parts:
+                if hasattr(part, name):
+                    return getattr(part, name)
+            raise AttributeError(f"no station module has {name}")
+
+        def __setattr__(self, name, value):
+            set_everywhere(name, value)
+    return Everything()
+
+
 def redirect(old, new):
     """Points every path setting under `old` (a folder) at the same place under `new`, in every loaded station
     module. Settings like QUIZ_FILE are worked out from DATA_DIR when the module loads, so setting DATA_DIR alone

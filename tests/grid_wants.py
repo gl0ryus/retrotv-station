@@ -4,14 +4,14 @@ import json, logging, os, shutil, sys, time
 logging.basicConfig(level=logging.ERROR)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from retrotv import station as rs
+import harness
+rs = harness.everything()
 
 TMP = "/tmp/grid_wants"
 os.makedirs(TMP, exist_ok=True)
 for name in ("retrotv_manifest.json", "retrotv_series.json", "retrotv_aired.json", "retrotv_turns.json"):
     if os.path.exists(os.path.expanduser("~/" + name)):
         shutil.copy(os.path.expanduser("~/" + name), f"{TMP}/{name}")
-import harness
 harness.guard(rs)
 rs.MANIFEST_FILE, rs.SERIES_FILE, rs.AIRED_FILE = f"{TMP}/retrotv_manifest.json", f"{TMP}/retrotv_series.json", f"{TMP}/retrotv_aired.json"
 rs.TURNS_FILE = f"{TMP}/retrotv_turns.json"

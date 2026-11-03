@@ -1,7 +1,9 @@
 # The player's memory safety net, against a real mpv with no screen. Runs on the Pi: python3 -I player_test.py
 import os, sys, tempfile, threading, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-from retrotv import station as rs
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harness
+rs = harness.everything()
 
 TMP = tempfile.mkdtemp(prefix="player_test")
 rs.MPV_SOCKET = TMP + "/mpv.sock"

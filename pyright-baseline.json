@@ -49,6 +49,8 @@
  "news.py | reportOptionalSubscript | Object of type \"None\" is not subscriptable",
  "news.py | reportOptionalSubscript | Object of type \"None\" is not subscriptable",
  "news.py | reportOptionalSubscript | Object of type \"None\" is not subscriptable",
+ "overlays.py | reportGeneralTypeIssues | \"Never\" is not iterable",
+ "player.py | reportOptionalMemberAccess | \"sendall\" is not a known attribute of \"None\"",
  "screens.py | reportArgumentType | Argument of type \"Unknown | Any | None\" cannot be assigned to parameter \"key\" of type \"int\" in function \"get\"",
  "screens.py | reportArgumentType | Argument of type \"Unknown | None\" cannot be assigned to parameter \"key\" of type \"str\" in function \"get\"",
  "screens.py | reportArgumentType | Argument of type \"int\" cannot be assigned to parameter \"value\" of type \"str | list[str]\" in function \"__setitem__\"",
@@ -71,7 +73,6 @@
  "station.py | reportAttributeAccessIssue | Cannot assign to attribute \"refresh\" for class \"Item\"",
  "station.py | reportAttributeAccessIssue | Cannot assign to attribute \"show\" for class \"Item\"",
  "station.py | reportAttributeAccessIssue | Cannot assign to attribute \"video\" for class \"Item\"",
- "station.py | reportGeneralTypeIssues | \"Never\" is not iterable",
  "station.py | reportGeneralTypeIssues | \"None\" is not iterable",
  "station.py | reportOptionalMemberAccess | \"crawl_due\" is not a known attribute of \"None\"",
  "station.py | reportOptionalMemberAccess | \"crawled\" is not a known attribute of \"None\"",
@@ -80,6 +81,5 @@
  "station.py | reportOptionalMemberAccess | \"mark_aired\" is not a known attribute of \"None\"",
  "station.py | reportOptionalMemberAccess | \"new_cut_ins\" is not a known attribute of \"None\"",
  "station.py | reportOptionalMemberAccess | \"poll\" is not a known attribute of \"None\"",
- "station.py | reportOptionalMemberAccess | \"sendall\" is not a known attribute of \"None\"",
  "station.py | reportOptionalMemberAccess | \"test_aired\" is not a known attribute of \"None\""
 ]

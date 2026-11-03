@@ -41,14 +41,18 @@ class FakeDate(_dt.date):
 fake = types.SimpleNamespace(datetime=FakeDT, date=FakeDate, timedelta=_dt.timedelta, time=_dt.time)
 import random
 random.seed(seed)
-from retrotv import station as rs
+import harness
+rs = harness.everything()   # the station's modules as one: see harness.everything
 from retrotv import cards
 from retrotv import meta
 from retrotv import events
 from retrotv import screens
 from retrotv import schedule
-for m in (rs, meta, cards, events, screens):
-    m.datetime = fake
+# The virtual clock, in the modules that plan and draw: the station's parts (once one file) and the screens
+import importlib
+for m in [importlib.import_module(f"retrotv.{part}") for part in harness.STATION_PARTS] + [meta, cards, events, screens]:
+    if hasattr(m, "datetime"):
+        m.datetime = fake
 cards.CARDS_DIR = SIM + "/cards"
 import harness
 shutil.copy(harness.frozen("retrotv_manifest.json"), SIM + "/manifest.json")

@@ -2,7 +2,9 @@
 # With "live" it also fetches the real National Weather Service and renders the cards to /tmp/wx_cards.
 import datetime, io, json, os, re, shutil, sys, tempfile, time, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-from retrotv import station as rs
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harness
+rs = harness.everything()
 from retrotv import cards
 from retrotv import screens
 from retrotv import weather as wx

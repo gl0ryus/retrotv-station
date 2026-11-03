@@ -2,7 +2,9 @@
 import glob, http.server, json, os, re, shutil, sys, tempfile, threading, time, urllib.request
 ST = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the station: this is its tests/ folder
 sys.path.insert(0, ST)
-from retrotv import station as rs
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harness
+rs = harness.everything()
 from retrotv import health
 from retrotv import launches
 

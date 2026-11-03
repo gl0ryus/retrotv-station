@@ -2,7 +2,9 @@
 import json, logging, math, os, sys, collections
 logging.basicConfig(level=logging.ERROR)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-from retrotv import station as rs
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harness
+rs = harness.everything()
 from retrotv import schedule as sch
 from retrotv import meta
 doc = sch.load()

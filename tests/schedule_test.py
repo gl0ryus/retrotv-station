@@ -3,9 +3,11 @@
 import json, logging, os, sys, time
 logging.basicConfig(level=logging.INFO)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retrotv import remote
 from retrotv import schedule
-from retrotv import station as rs
+import harness
+rs = harness.everything()
 
 schedule.SCHEDULE_FILE = "/tmp/schedule_test.json"
 schedule.LENGTHS_FILE = "/tmp/schedule_test_lengths.json"

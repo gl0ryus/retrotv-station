@@ -2,7 +2,9 @@
 # Uses a temporary art folder; with a video file it also looks up real art for the marathon shows and renders frames.
 import datetime, io, json, os, shutil, subprocess, sys, tempfile, time, types, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-from retrotv import station as rs
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import harness
+rs = harness.everything()
 from retrotv import art
 from retrotv import cards
 from retrotv import events
