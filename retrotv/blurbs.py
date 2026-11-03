@@ -23,7 +23,8 @@ import re
 from retrotv import health
 from retrotv.cards import BARLOW_S, CHANNEL, WHITE, Card, Script, esc, lavfi_url, music
 from retrotv.jsonio import get_json, write_json
-from retrotv.screens import DATA_DIR, wrap
+from retrotv.paths import DATA_DIR
+from retrotv.screens import wrap
 
 logger = logging.getLogger("RetroTV")
 
@@ -283,4 +284,4 @@ def card(kicker, beats):
     d = round(t + 2.1, 2)
     beds = [b for b in BEDS if os.path.exists(music(b))]
     bed = music(random.choice(beds)) if beds else None
-    return Card(lavfi_url(s.write("blurb"), d, bed, background="0x000000", loop=True), d, "blurb")
+    return s.card("blurb", d, bed, background="0x000000", loop=True, card_kind="blurb")

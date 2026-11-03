@@ -8,10 +8,9 @@ import os
 import re
 
 from retrotv import cards
+from retrotv.paths import ASSETS_DIR, HOME_DIR, INDEX_FILE, LOCATION_FILE, MANIFEST_FILE, MEDIA_ROOT, NAS_ROOT
 
 
-NAS_ROOT = "/mnt/tower/.retrotv"
-MEDIA_ROOT = os.path.join(NAS_ROOT, "videos")
 PATHS = {
     "commercials": os.path.join(MEDIA_ROOT, "commercials"),
     "movies": os.path.join(MEDIA_ROOT, "movies"),
@@ -21,7 +20,6 @@ PATHS = {
 }
 MAIN_CATEGORIES = ["videos", "movies", "g4"]
 VIDEO_EXTENSIONS = ('.mkv', '.mp4', '.avi', '.mov', '.webm', '.flv', '.wmv')
-HOME_DIR = "/home/gl0ryus"
 CACHE_DIR = os.path.join(HOME_DIR, "retrotv_cache")
 # Shows and movies go on the USB drive when it's mounted (see CacheManager._usb_ready); commercials, music videos and
 # archive.org's downloads stay on the SD card
@@ -39,9 +37,7 @@ SCHEDULE_FILL_DAYS = 14    # the refill copies what the weekly schedule airs thi
 FULL_AFTER_MISSES = 10     # this many copies in a row without room: the pool is full of what's wanted sooner
 POOL_CHOICES = 8           # a shuffle group picks whichever of the longest waiting this many best fills its slot
 SIGN_OFF_MARGIN_MINUTES = 10   # a show that would start this close to sign-off waits for the morning
-MANIFEST_FILE = os.path.join(HOME_DIR, "retrotv_manifest.json")
-# The index lives on the SD card too, so the NAS share can stay read-only and asleep
-INDEX_FILE = os.path.join(HOME_DIR, "retrotv_index.json")
+# The index (INDEX_FILE) lives on the SD card too, so the NAS share can stay read-only and asleep
 NAS_INDEX_FILE = os.path.join(NAS_ROOT, "station", "legacy", "media_index.json")  # old shared index, only read to seed a first run
 
 # Everything plays from the cache. The NAS is only touched during a refill, which fills
@@ -88,7 +84,6 @@ PLAYER_MEMORY_MB = 1200
 PLAYER_MEMORY_CHECK_SECONDS = 60
 SHOW_TITLE_SECONDS = 0     # show a show's name on screen as it starts (0 = off; the promo lower third and the
                            # Up Next card already name it); commercials never get one
-ASSETS_DIR = os.path.join(HOME_DIR, "retrotv_assets")
 BUMPER_FILE = os.path.join(HOME_DIR, "retrotv_bumper.mp4")    # plays before every show (None = off)
 STATIC_FILE = os.path.join(ASSETS_DIR, "static.mp4")          # a burst of snow between items (None = off)
 STATIC_SECONDS = 0.4
@@ -163,9 +158,8 @@ BLURB_CHEEKY_HOUR = 21
 BLURB_RAUNCHY_HOUR = 23
 SPECIAL_GAP_MINUTES = 10
 FRESH_SPECIALS = ("weather",)   # made again with the latest data just before they're queued
-# Where the weather and the emergency alerts are for, kept out of the repo in this file next to the script:
-# {"place": "Town, ST", "lat": 28.0, "lon": -82.5}. Without it there's no weather card and no alerts
-LOCATION_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "location.json")   # next to the launcher, outside the package
+# Where the weather and the emergency alerts are for, kept out of the repo in LOCATION_FILE at the top of the station
+# folder: {"place": "Town, ST", "lat": 28.0, "lon": -82.5}. Without it there's no weather card and no alerts
 WEATHER_TZ = "America/New_York"
 # Emergency alerts from the National Weather Service for WEATHER_LAT/LON (retrotv/alerts.py). The worst
 # warnings cut into the show with the alert tones and a voice, then it picks up where it left off; other

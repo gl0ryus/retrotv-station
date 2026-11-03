@@ -5,22 +5,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#16110d">
 <title>G|TV Guide</title>
+<link rel="stylesheet" href="/common.css">
 <style>
-@font-face { font-family: "Archivo Black"; src: url(/fonts/ArchivoBlack-Regular.ttf); }
-@font-face { font-family: "Barlow Condensed"; font-weight: 600; src: url(/fonts/BarlowCondensed-SemiBold.ttf); }
-@font-face { font-family: "Barlow Condensed"; font-weight: 700; src: url(/fonts/BarlowCondensed-Bold.ttf); }
-@font-face { font-family: "Barlow Condensed"; font-weight: 800; src: url(/fonts/BarlowCondensed-ExtraBold.ttf); }
 /* The station's own look: the bumper's warm near-black, cream type, mustard accents and the four stripes */
 :root {
-  --bg: #16110d; --grid: #211912; --panel: #2b2017; --cell: #4e3420; --cell-now: #6e4724; --cell-off: #2a1f16;
-  --line: #3d2c1e; --edge: #7a5232; --white: #efe6d2; --sky: #c4ad88; --yellow: #f2b33d; --mustard: #e8b33a;
-  --cream: #efe6d2; --ink: #16110d; --shadow-red: #8a2a1f;
+  --cell: #4e3420; --cell-now: #6e4724; --cell-off: #2a1f16; --yellow: #f2b33d; --shadow-red: #8a2a1f;
   --s1: #f2b33d; --s2: #ee7f2a; --s3: #dd4f27; --s4: #b8322a; --live: #ff5a2e;
   --stripes: linear-gradient(to bottom, var(--s1) 0 3px, var(--bg) 3px 4px, var(--s2) 4px 7px, var(--bg) 7px 8px,
                              var(--s3) 8px 11px, var(--bg) 11px 12px, var(--s4) 12px 14px);
   --col: 140px; --chan: 78px; --rowh: 66px;
 }
-* { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--white); }
 body { font: 600 17px/1.25 "Barlow Condensed", system-ui, sans-serif; padding: 14px 0 calc(24px + env(safe-area-inset-bottom)); }
 .pad { padding: 0 16px; max-width: 760px; margin: 0 auto; }

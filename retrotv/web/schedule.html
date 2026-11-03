@@ -5,19 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#16110d">
 <title>G|TV Scheduler</title>
+<link rel="stylesheet" href="/common.css">
 <style>
-@font-face { font-family: "Archivo Black"; src: url(/fonts/ArchivoBlack-Regular.ttf); }
-@font-face { font-family: "Barlow Condensed"; font-weight: 600; src: url(/fonts/BarlowCondensed-SemiBold.ttf); }
-@font-face { font-family: "Barlow Condensed"; font-weight: 700; src: url(/fonts/BarlowCondensed-Bold.ttf); }
-@font-face { font-family: "Barlow Condensed"; font-weight: 800; src: url(/fonts/BarlowCondensed-ExtraBold.ttf); }
 /* The remote's look: the bumper's warm near-black, cream type, mustard accents */
 :root {
-  --bg: #16110d; --grid: #211912; --panel: #2b2017; --raise: #3a2b1e; --line: #3d2c1e; --edge: #7a5232;
-  --white: #efe6d2; --sky: #c4ad88; --mustard: #e8b33a; --warn: #ff7a4d; --ink: #16110d;
+  --raise: #3a2b1e; --warn: #ff7a4d;
   --g4: #f2b33d; --kids: #6fc3e6; --sitcom: #efd48a; --drama: #a9cf8a; --late: #a897e0; --tape: #e8957f; --movie: #d9534a; --music: #2fa39c;
   --row: 25px; --gutter: 58px;
 }
-* { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--white); }
 body { font: 600 16px/1.2 "Barlow Condensed", system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; }
 button, input { font: inherit; color: inherit; }

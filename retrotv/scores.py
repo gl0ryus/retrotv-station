@@ -10,13 +10,12 @@ import re
 import subprocess
 import time
 
-from retrotv.alerts import LABEL_TEXT
 from retrotv.art import download_image
-from retrotv.cards import ARCHIVO, BARLOW_X, CREAM, FONTS_DIR, H, MUSTARD, Script, W, rounded
+from retrotv.cards import LABEL_INK, ARCHIVO, BARLOW_X, CREAM, FONTS_DIR, H, MUSTARD, Script, W, rounded
 from retrotv.cards import fit as cards_fit
 from retrotv.events import BAR_RIGHT, BAR_SLANT, lower_third
 from retrotv.jsonio import get_json
-from retrotv.screens import DATA_DIR
+from retrotv.paths import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 
@@ -170,15 +169,15 @@ def board_filter(games, start, logos):
         fade = (120, 120)
         title = f"{g['league'].upper()} SCORES"
         detail = g["detail"].upper()
-        s.text(a, b, 54, TOP + 36, title, BARLOW_X, cards_fit(title, BARLOW_X, 40, room), LABEL_TEXT, align=4, fade=fade, layer=3)
-        s.text(a, b, 54, TOP + 78, detail, BARLOW_X, cards_fit(detail, BARLOW_X, 40, room), LABEL_TEXT, align=4, fade=fade, layer=3)
+        s.text(a, b, 54, TOP + 36, title, BARLOW_X, cards_fit(title, BARLOW_X, 40, room), LABEL_INK, align=4, fade=fade, layer=3)
+        s.text(a, b, 54, TOP + 78, detail, BARLOW_X, cards_fit(detail, BARLOW_X, 40, room), LABEL_INK, align=4, fade=fade, layer=3)
         color = MUSTARD if g["ours"] else CREAM
         for j, side in enumerate((g["away"], g["home"])):
             x = FIRST_TEAM_X + j * TEAM_WIDTH
             has_logo = (g["league"], side[0]) in logos
             s.shape(a, b, x, TOP + (HEIGHT - CHIP) / 2, rounded(CHIP, CHIP, 10), CREAM, fade=fade, layer=3)
             if not has_logo:   # no logo to hand: the team's letters on the same plate
-                s.text(a, b, x + CHIP / 2, TOP + HEIGHT / 2, side[0], BARLOW_X, cards_fit(side[0], BARLOW_X, 44, CHIP - 8), LABEL_TEXT, fade=fade, layer=4)
+                s.text(a, b, x + CHIP / 2, TOP + HEIGHT / 2, side[0], BARLOW_X, cards_fit(side[0], BARLOW_X, 44, CHIP - 8), LABEL_INK, fade=fade, layer=4)
             middle = x + CHIP + (TEAM_WIDTH - CHIP - 8) / 2
             s.text(a, b, middle, TOP + 40, str(side[1]), ARCHIVO, SCORE_SIZE, color, fade=fade, layer=3)
             s.text(a, b, middle, TOP + 88, side[0], BARLOW_X, NAME_SIZE, color, fade=fade, layer=3)

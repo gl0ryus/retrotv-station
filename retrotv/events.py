@@ -11,6 +11,7 @@ import subprocess
 
 from retrotv import cards
 from retrotv.cards import (
+    BAR_RULE, LABEL_INK,
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, MUSTARD, SHADOW_RED, SKY, W, H, WHITE, YELLOW,
     ASSETS_DIR, CHANNEL, FONTS_DIR, NETWORK, RENDER, Card, Script, circle, clip_text, clock, esc, fit, info_header, look,
     music, rect, stripes,
@@ -296,7 +297,7 @@ def reminder(name, when, now, season=None):
     s.text(0.4, d, 512, 405, line, BARLOW_X, 46, CREAM, spacing=2)
     tip = "MAKE SOME TIME FOR THEM TODAY" if days == 0 else REMINDER_TIPS.get(name, "A CARD, A GIFT OR A VISIT")
     s.text(0.7, d, 512, 470, tip, BARLOW_B, 38, lk.accent, spacing=6)
-    return Card(cards.lavfi_url(s.write("reminder"), d, music("upnext_bed.ogg"), background=lk.bg), d, "reminder")
+    return s.card("reminder", d, music("upnext_bed.ogg"), background=lk.bg, card_kind="reminder")
 
 
 # --- Marathons ---
@@ -321,7 +322,7 @@ def marathon(name, series_name, start, season=None):
         s.text(1.0, d, 512, 492, "HOLIDAY EDITION", XMAS, 56, XMAS_RED, outline=3, extra=f"\\3c{WHITE}\\b1")
     else:
         s.text(1.0, d, 512, 492, f"BACK TO BACK STARTING NOW · {clock(start)}", BARLOW_S, 38, lk.accent, spacing=4)
-    return Card(cards.lavfi_url(s.write("marathon"), d, music("marathon_sting.ogg"), background=lk.bg), d, "card")
+    return s.card("marathon", d, music("marathon_sting.ogg"), background=lk.bg)
 
 
 def marathon_ad(image, name, when, start_time, season=None):
@@ -349,8 +350,6 @@ BAR_RIGHT = 745      # the lower thirds end left of the logo bug in the bottom r
 BAR_TOP, BAR_HEIGHT = 462, 62
 BAR_SLANT = 22
 BAR_COLOR = "&H00201810&"
-BAR_RULE = "&H002A7FEE&"    # the line under it
-LABEL_INK = "&H00161110&"   # the words in the mustard label box
 NAME_CHAR = 14.5     # Barlow Condensed ExtraBold caps at 46: about this wide per character, as rendered
 
 
@@ -405,7 +404,7 @@ def launch_cut_in(rocket, mission, where, season=None):
     mission = clip_text(mission.upper(), 40)
     s.text(0.7, d, 512, 442, mission, BARLOW_X, fit(mission, BARLOW_X, 50, 880), CREAM)
     s.text(1.0, d, 512, 505, clip_text(f"A SPACE LAUNCH IS HAPPENING · {where.upper()}", 56), BARLOW_S, 34, lk.accent, spacing=3)
-    return Card(cards.lavfi_url(s.write("launch"), d, music("marathon_sting.ogg"), background=lk.bg), d, "card")
+    return s.card("launch", d, music("marathon_sting.ogg"), background=lk.bg)
 
 
 def promo(panels, start, panel_seconds=4.5):
@@ -559,8 +558,7 @@ def lottery(when, season=None):
     s.text(51.0, d, 512, 398, f"BONUS {numbers[6]:02d}", BARLOW_X, 48, YELLOW, spacing=4, fade=(300, 600), layer=15)
     s.text(52.0, d, 512, 448, f"{CHANNEL} LOTTO IS FOR ENTERTAINMENT ONLY. NO TICKETS. NO PRIZES. NO KIDDING.",
            BARLOW_S, 26, SKY, fade=(400, 600), layer=15)
-    return Card(cards.lavfi_url(s.write("lottery"), d, music("lotto_bed.ogg"), background=LOTTO_BACKGROUND),
-                d, "lottery")
+    return s.card("lottery", d, music("lotto_bed.ogg"), background=LOTTO_BACKGROUND, card_kind="lottery")
 
 
 # --- New Year's Eve ---
@@ -607,7 +605,7 @@ def new_year(year):
             ang = k * 360 / 14
             s.shape(t0, t0 + 1.4, x, y, rect(3, 30), color, fade=(0, 700), layer=5, align=2,
                     extra=f"\\org({x},{y})\\frz{ang:.0f}\\fscy20\\t(0,500,\\fscy160)\\blur1")
-    return Card(cards.lavfi_url(s.write("newyear"), d, music("newyear.ogg"), background="0x0a0820"), d, "newyear")
+    return s.card("newyear", d, music("newyear.ogg"), background="0x0a0820", card_kind="newyear")
 
 
 # --- Sign-off and sign-on ---

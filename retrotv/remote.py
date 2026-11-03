@@ -23,6 +23,7 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 PAGE_FILE = os.path.join(WEB_DIR, "remote.html")
 SCHEDULE_PAGE_FILE = os.path.join(WEB_DIR, "schedule.html")
 HEALTH_PAGE_FILE = os.path.join(WEB_DIR, "health.html")
+COMMON_CSS_FILE = os.path.join(WEB_DIR, "common.css")   # the pages' fonts and palette
 MAX_BODY = 65536
 MAX_SCHEDULE_BODY = 1024 * 1024
 FONT_FILES = ("ArchivoBlack-Regular.ttf", "BarlowCondensed-Bold.ttf", "BarlowCondensed-ExtraBold.ttf",
@@ -34,6 +35,7 @@ class Handler(BaseHTTPRequestHandler):
     page = b""
     schedule_page = b""
     health_page = b""
+    common_css = b""
     fonts = {}
 
     def log_message(self, *args):
@@ -65,6 +67,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, self.schedule_page, "text/html; charset=utf-8")
             elif url.path == "/health":
                 self._send(200, self.health_page, "text/html; charset=utf-8")
+            elif url.path == "/common.css":
+                self._send(200, self.common_css, "text/css; charset=utf-8")
             elif url.path == "/api/health":
                 self._send(200, self.station.remote_health())
             elif url.path == "/api/library":
@@ -153,6 +157,11 @@ def start(station, port):
     except OSError as e:
         logger.error(f"Health page missing: {e}")
         Handler.health_page = b"<p>Health page missing.</p>"
+    try:
+        with open(COMMON_CSS_FILE, "rb") as f:
+            Handler.common_css = f.read()
+    except OSError as e:
+        logger.error(f"Page styles missing: {e}")
     for name in FONT_FILES:
         try:
             with open(os.path.join(FONTS_DIR, name), "rb") as f:

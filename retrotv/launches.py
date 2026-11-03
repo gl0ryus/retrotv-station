@@ -13,11 +13,12 @@ import urllib.error
 
 from retrotv import health
 from retrotv.jsonio import get_json, write_json
+from retrotv.paths import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 
 API = "https://ll.thespacedevs.com/2.3.0/launches"
-STATE_FILE = os.path.expanduser("~/retrotv_data/launch_live.json")
+STATE_FILE = os.path.join(DATA_DIR, "launch_live.json")
 YT_DLP = os.path.expanduser("~/retrotv_venv/bin/yt-dlp")
 STREAM_FORMAT = "bv*[height<=480]+ba/b[height<=480]/b"   # the picture is crunched to 200 lines anyway
 FLORIDA = (12, 27)         # Launch Library's Cape Canaveral and Kennedy

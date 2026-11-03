@@ -22,10 +22,10 @@ import urllib.parse
 import urllib.request
 
 from retrotv.jsonio import write_json
+from retrotv.paths import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 
-DATA_DIR = os.path.expanduser("~/retrotv_data")
 BAD_FILES_FILE = os.path.join(DATA_DIR, "bad_files.json")
 FLUSH_SECONDS = 300       # how often the results are saved when nothing has changed (the SD card thanks you)
 FAILS_TO_DOWN = 3         # failures in a row before a service counts as down rather than having trouble

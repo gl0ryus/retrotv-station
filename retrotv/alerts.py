@@ -26,6 +26,7 @@ import wave
 
 from retrotv import cards
 from retrotv.cards import (
+    BAR_RULE, LABEL_INK,
     ARCHIVO, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, ORANGE_RULE, W, WHITE, YELLOW, Card, Script,
     clip_text, clock, fit, lavfi_url, music, rect, text_width,
 )
@@ -46,8 +47,6 @@ AIRED_DAYS = 7                               # how long an aired alert's id is r
 EAS_BACKGROUND = "0x0a0a0a"
 EAS_RED = "&H001C1CB4&"
 CRAWL_RED = "&H001A1A9E&"
-LABEL_TEXT = "&H00161110&"   # the lower thirds' label ink and underline
-UNDERLINE = "&H002A7FEE&"
 CRAWL_SPEED = 110.0     # px/s on the 1024-wide canvas
 CAPS_CHAR = 0.315       # Barlow Condensed ExtraBold caps: average width per character as a fraction of the size, as rendered
 
@@ -334,8 +333,8 @@ def crawl_script(text, label, start):
     s.shape(start, end, 0, top, rect(W, h), CRAWL_RED, fade=(0, 300), layer=1, extra=slide(0, top) + "\\1a&H10&")
     s.shape(start, end, 0, top, cards.slanted_bar(box, h, 22), MUSTARD, fade=(0, 300), layer=3,
             extra=slide(0, top))
-    s.shape(start, end, 0, top + h + 2, rect(W, 5), UNDERLINE, fade=(0, 300), layer=2, extra=slide(0, top + h + 2))
-    s.text(start, end, 62, y, label, ARCHIVO, 40, LABEL_TEXT, align=4, fade=(0, 300), layer=4, extra=slide(62, y))
+    s.shape(start, end, 0, top + h + 2, rect(W, 5), BAR_RULE, fade=(0, 300), layer=2, extra=slide(0, top + h + 2))
+    s.text(start, end, 62, y, label, ARCHIVO, 40, LABEL_INK, align=4, fade=(0, 300), layer=4, extra=slide(62, y))
     s.text(start, end, 0, y, text, BARLOW_X, 46, CREAM, align=4, fade=None, layer=2,
            extra=f"\\move({W + 10},{y},{box - 22 - width:.0f},{y},{lead * 1000:.0f},{(lead + crawl) * 1000:.0f})")
     return s.write("crawl"), d
@@ -402,7 +401,7 @@ def bulletin(kind, title, area, until, body, crawl, voice):
         s.shape(0.8, d, 0, 500, rect(W, H - 500), CRAWL_RED, fade=fade, layer=1)
         s.text(1.0, d, 0, 546, crawl, BARLOW_S, 38, WHITE, align=4, fade=None, layer=2,
                extra=f"\\move({W + 10},546,{-10 - width:.0f},546,0,{travel / 120.0 * 1000:.0f})")
-    return Card(lavfi_url(s.write(kind), d, wav, background=EAS_BACKGROUND, fade_out=False), d, kind)
+    return s.card(kind, d, wav, background=EAS_BACKGROUND, fade_out=False, card_kind=kind)
 
 
 def cut_in_card(alert):

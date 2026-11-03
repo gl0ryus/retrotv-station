@@ -17,15 +17,15 @@ import urllib.error
 import urllib.parse
 
 from retrotv.jsonio import USER_AGENT, get_json, write_json  # USER_AGENT: other modules still import it from here
-from retrotv.cards import (weather_as_of, 
-    ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, SHADOW_RED, SKY, W, WHITE,
-    YELLOW, ASSETS_DIR, CHANNEL, WMO, Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look,
-    music, rect, text_width,
+from retrotv.cards import (
+    ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, H, MUSTARD, SHADOW_RED, SKY, W, WHITE, YELLOW, CHANNEL, WMO,
+    Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look, music, rect, text_width,
+    weather_as_of,
 )
+from retrotv.paths import ASSETS_DIR, DATA_DIR, HOME_DIR
 
 logger = logging.getLogger("RetroTV")
 
-DATA_DIR = os.path.join(HOME_DIR, "retrotv_data")
 WORLD_MAP = os.path.join(ASSETS_DIR, "world_110m.json")  # Natural Earth 110m land, simplified
 SPACE_BACKGROUND = "0x060a1e"
 QUIZ_BACKGROUND = "0x1c0a36"
@@ -371,7 +371,7 @@ def pop_quiz(season=None, month=None):
     if q.get("source"):   # the credit its licence asks for
         s.text(0.8, d, 512, 572, f"QUESTION FROM {q['source'].upper()}", BARLOW_B, 24, "&H00B0A8B8&", spacing=1,
                fade=out, layer=3)
-    return Card(lavfi_url(s.write("quiz"), d, music("quiz_bed.ogg"), background=QUIZ_BACKGROUND), d, "quiz")
+    return s.card("quiz", d, music("quiz_bed.ogg"), background=QUIZ_BACKGROUND, card_kind="quiz")
 
 
 # --- Today in History ---
@@ -464,7 +464,7 @@ def today_in_history(now, season=None, month=None):
         name = clip_text(name, 34)
         s.text(a, d, 250, y - 14, name, BARLOW_X, fit(name, BARLOW_X, 40, 690), CREAM, align=4, fade=fade, layer=3)
         s.text(a, d, 252, y + 20, clip_text(what, 60), BARLOW_S, 28, SKY, align=4, fade=fade, layer=3)
-    return Card(lavfi_url(s.write("history"), d, music("history_bed.ogg"), loop=True), d, "history")
+    return s.card("history", d, music("history_bed.ogg"), loop=True, card_kind="history")
 
 
 # --- Launch Watch ---
@@ -573,7 +573,7 @@ def launch_watch(now, season=None):
         s.text(a, d, 230, y, what, BARLOW_B, fit(what, BARLOW_B, 30, 470), WHITE, align=4, fade=fade, layer=3)
         place = ("★ " if l["florida"] else "") + clip_text(l["place"], 24)
         s.text(a, d, 944, y, place, BARLOW_S, fit(place, BARLOW_S, 28, 250), color, align=6, fade=fade, layer=3)
-    return Card(lavfi_url(s.write("launch"), d, music("space_bed.ogg"), background=SPACE_BACKGROUND), d, "launch")
+    return s.card("launch", d, music("space_bed.ogg"), background=SPACE_BACKGROUND, card_kind="launch")
 
 
 # --- Tonight's Sky ---
@@ -667,8 +667,7 @@ def tonight_sky(now, season=None):
     else:
         s.text(1.1, d, x, 490, "NO EVENING PASSES YOU CAN SEE", BARLOW_B, 32, SKY, align=4, fade=fade, layer=3)
         s.text(1.2, d, x, 534, "IN THE NEXT 3 DAYS", BARLOW_S, 28, CREAM, align=4, spacing=1, fade=fade, layer=3)
-    return Card(lavfi_url(s.write("sky"), d, music("space_bed.ogg"), background=SPACE_BACKGROUND, loop=True), d,
-                "sky")
+    return s.card("sky", d, music("space_bed.ogg"), background=SPACE_BACKGROUND, loop=True, card_kind="sky")
 
 
 # --- Markets ---
@@ -764,8 +763,7 @@ def markets(now, season=None):
     if any(sym == "S&P 500" for sym, *_ in rows):
         sources = "S&P 500 change vs. prior close · CoinGecko · Yahoo Finance"
     s.text(0.8, d, 512, 566, sources.upper(), BARLOW_B, 28, "&H00B0B8B0&", spacing=1, fade=fade, layer=3)
-    return Card(lavfi_url(s.write("markets"), d, music("weather_bed.ogg"), background=MARKET_BACKGROUND, loop=True),
-                d, "markets")
+    return s.card("markets", d, music("weather_bed.ogg"), background=MARKET_BACKGROUND, loop=True, card_kind="markets")
 
 
 # --- Art Break ---
@@ -813,7 +811,7 @@ def art_break(now, season=None):
     caption = art.get("title", "").upper()
     s.text(draw + 1.2, d, W // 2, ART_Y + ART_H + 1, caption, BARLOW_X, fit(caption, BARLOW_X, 30, 800), MUSTARD,
            align=8, spacing=4, fade=(400, 400), layer=3)
-    return Card(lavfi_url(s.write("art"), d, music("blurb_vapor1.ogg"), background="0x101418", loop=True), d, "art")
+    return s.card("art", d, music("blurb_vapor1.ogg"), background="0x101418", loop=True, card_kind="art")
 
 
 # --- Anniversary Airing ---
@@ -852,8 +850,7 @@ def anniversary(info, name, episode, now, season=None):
         for i, line in enumerate(week[:2]):
             s.text(1.8 + i * 0.4, d, 80, 478 + i * 42, clip_text(line, 72), BARLOW_B, fit(line, BARLOW_B, 34, 864),
                    WHITE, align=4, fade=fade, layer=3)
-    return Card(lavfi_url(s.write("anniversary"), d, music("history_bed.ogg"), background="0x140c06", loop=True), d,
-                "anniversary")
+    return s.card("anniversary", d, music("history_bed.ogg"), background="0x140c06", loop=True, card_kind="anniversary")
 
 
 # --- Weekly Countdown ---
@@ -927,8 +924,7 @@ def countdown(chart, up_first, now, season=None):
         line = f"{artist} · {song}".upper()
         s.text(a + 0.2, d, 104, 556, line, ARCHIVO, fit(line, ARCHIVO, 32, 820), "&H00200A14&", align=4,
                fade=fade, layer=3)
-    return Card(lavfi_url(s.write("countdown"), d, music("lotto_bed.ogg"), background="0x10061c", loop=True), d,
-                "countdown")
+    return s.card("countdown", d, music("lotto_bed.ogg"), background="0x10061c", loop=True, card_kind="countdown")
 
 
 # --- Teletext ---
@@ -1117,8 +1113,7 @@ def teletext(now, weather, place, listings, headlines, season=None):
         for label, colour in (("TV", "red"), ("Weather", "green"), ("Markets", "yellow"), ("News", "cyan")):
             _tt_text(s, start, end, 24, col, label, colour)
             col += len(label) + 3
-    return Card(lavfi_url(s.write("teletext"), d, music("weather_bed.ogg"), background="0x000000", loop=True), d,
-                "teletext")
+    return s.card("teletext", d, music("weather_bed.ogg"), background="0x000000", loop=True, card_kind="teletext")
 
 
 # --- Who's in Space ---
@@ -1253,5 +1248,4 @@ def whos_in_space(now, season=None):
                    f"   ·   {current['velocity']:,.0f} MPH   ·   {current['altitude']:,.0f} MILES UP")
         s.shape(a, b, MAP_X, MAP_Y + 360 - 40, rect(720, 40), "&H00000000&", fade=fade, layer=8, extra="\\1a&H50&")
         s.text(a, b, 512, MAP_Y + 360 - 20, caption, BARLOW_B, 28, WHITE, fade=fade, layer=9)
-    return Card(lavfi_url(s.write("space"), d, music("space_bed.ogg"), background=SPACE_BACKGROUND, loop=True), d,
-                "space")
+    return s.card("space", d, music("space_bed.ogg"), background=SPACE_BACKGROUND, loop=True, card_kind="space")

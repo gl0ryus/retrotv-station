@@ -1,0 +1,11 @@
+/* What the station's pages share: its fonts, and the bumper's palette of warm near-black, cream type and mustard
+   accents. Each page adds its own colours after this. Served at /common.css by retrotv/remote.py */
+@font-face { font-family: "Archivo Black"; src: url(/fonts/ArchivoBlack-Regular.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 600; src: url(/fonts/BarlowCondensed-SemiBold.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 700; src: url(/fonts/BarlowCondensed-Bold.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 800; src: url(/fonts/BarlowCondensed-ExtraBold.ttf); }
+:root {
+  --bg: #16110d; --grid: #211912; --panel: #2b2017; --line: #3d2c1e; --edge: #7a5232;
+  --cream: #efe6d2; --white: #efe6d2; --sky: #c4ad88; --mustard: #e8b33a; --ink: #16110d;
+}
+* { box-sizing: border-box; }

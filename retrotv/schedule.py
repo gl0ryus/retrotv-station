@@ -18,11 +18,11 @@ import statistics
 import subprocess
 import threading
 from retrotv.jsonio import write_json
+from retrotv.paths import DATA_DIR, SCHEDULE_FILE
 
 logger = logging.getLogger("RetroTV")
 
-SCHEDULE_FILE = os.path.expanduser("~/retrotv_schedule.json")
-LENGTHS_FILE = os.path.expanduser("~/retrotv_data/folder_lengths.json")   # {item id: minutes}, from a sample of files
+LENGTHS_FILE = os.path.join(DATA_DIR, "folder_lengths.json")   # {item id: minutes}, from a sample of files
 FIRST_HOUR, LAST_HOUR = 9, 26    # as the station counts them: 26 is 2 AM, when it signs off
 MODES = ("in_order", "shuffle")  # a group's shows take turns, next episode each | whatever has waited longest
 # A group's "overflow": whether a show too long for its slot runs past it (the default), or gets cut off at the end of it

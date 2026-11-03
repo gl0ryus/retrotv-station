@@ -14,10 +14,10 @@ import random
 import re
 import time
 
+from retrotv.paths import ASSETS_DIR, HOME_DIR
+
 logger = logging.getLogger("RetroTV")
 
-HOME_DIR = "/home/gl0ryus"
-ASSETS_DIR = os.path.join(HOME_DIR, "retrotv_assets")
 CARDS_DIR = os.path.join(ASSETS_DIR, "cards")      # generated .ass scripts
 FONTS_DIR = os.path.join(ASSETS_DIR, "fonts")      # Archivo Black + Barlow Condensed (OFL)
 MUSIC_DIR = os.path.join(ASSETS_DIR, "music")      # synthesized beds and stings
@@ -132,6 +132,10 @@ def clip_text(text, limit):
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
+LABEL_INK = "&H00161110&"   # the words in a lower third's mustard label box
+BAR_RULE = "&H002A7FEE&"    # the line under a lower third
+
+
 class Script:
     """Collects ASS events and writes the script file."""
     def __init__(self):
@@ -159,6 +163,11 @@ class Script:
 
     def raw(self, start, end, tags, body, layer=2):
         self.events.append((layer, start, end, "{" + tags + "}" + body))
+
+    def card(self, kind, duration, music=None, card_kind="card", **options):
+        """This script as a finished screen: written out, laid over its background with its music, as a Card.
+        options go to lavfi_url (background=, loop=, fade_out=, ...)."""
+        return Card(lavfi_url(self.write(kind), duration, music, **options), duration, card_kind)
 
     def write(self, kind):
         path = _next_path(kind)
@@ -495,7 +504,7 @@ def right_back(season=None):
     stripes(s, 0, d, 190, 362, 640, colors=lk.stripes)
     footer = f"{CHANNEL} · {lk.title.upper()}" if season in MONTH_LOOKS else CHANNEL
     s.text(0.4, d, 512, 470, footer, BARLOW_X, fit(footer, BARLOW_X, 44, 900, spacing=10), lk.accent, spacing=10)
-    return Card(lavfi_url(s.write("rightback"), d, music("sting_break.ogg"), background=lk.bg), d, "card")
+    return s.card("rightback", d, music("sting_break.ogg"), background=lk.bg)
 
 
 def back_to(name, season=None):
@@ -509,7 +518,7 @@ def back_to(name, season=None):
            shadow_color=lk.shadow, slant=-0.15)
     stripes(s, 0, d, 190, 350, 640, colors=lk.stripes)
     s.text(0.4, d, 512, 470, CHANNEL, BARLOW_X, 44, lk.accent, spacing=10)
-    return Card(lavfi_url(s.write("backto"), d, music("sting_back.ogg"), background=lk.bg), d, "card")
+    return s.card("backto", d, music("sting_back.ogg"), background=lk.bg)
 
 
 def up_next(show, later=None, later_time=None, duration=7.0, season=None):
@@ -534,7 +543,7 @@ def up_next(show, later=None, later_time=None, duration=7.0, season=None):
         s.text(1.1, d, 225, 450, later_name, BARLOW_B, fit(later_name, BARLOW_B, 44, 560), align=4)
         if later_time:
             s.text(1.2, d, 934, 450, clock(later_time), BARLOW_X, 44, CREAM, align=6)
-    return Card(lavfi_url(s.write("upnext"), d, music("upnext_bed.ogg"), background=lk.bg), d, "card")
+    return s.card("upnext", d, music("upnext_bed.ogg"), background=lk.bg)
 
 
 def station_id(now, good_morning=False, month=None):
@@ -564,7 +573,7 @@ def sign_off(returns_at, season=None):
     s.text(3.0, d, 512, 405, f"{NETWORK} RETURNS AT {clock(returns_at)}", BARLOW_S, 42, fade=(600, 1200))
     s.text(6.0, d, 512, 485, "GOOD NIGHT", ARCHIVO, 56, lk.accent, shadow=4, shadow_color=lk.shadow,
            fade=(900, 1200))
-    return Card(lavfi_url(s.write("signoff"), d, music("signoff.ogg"), background=lk.bg), d, "card")
+    return s.card("signoff", d, music("signoff.ogg"), background=lk.bg)
 
 
 def stand_by(season=None):
@@ -581,8 +590,7 @@ def stand_by(season=None):
     # A slow blink, like a stuck slide in the master control room
     for i in range(0, int(d), 2):
         s.text(i, i + 1, 512, 480, "●  PROGRAMMING WILL RESUME SHORTLY", BARLOW_B, 32, CREAM, fade=None)
-    return Card(lavfi_url(s.write("standby"), d, music("standby_loop.ogg"), fade_out=False, background=lk.bg), d,
-                "card")
+    return s.card("standby", d, music("standby_loop.ogg"), fade_out=False, background=lk.bg)
 
 
 # --- Program guide ---
@@ -635,7 +643,7 @@ def guide(rows, now, season=None):
         if detail:
             s.raw(0, d, f"\\an4\\fn{BARLOW_S}\\fs31\\c{TAN}\\bord0\\shad0\\fad({fade[0]},{fade[1]})" + mv(278, 66),
                   esc(clip_text(detail, 52)), layer=3)
-    return Card(lavfi_url(s.write("guide"), d, music("guide_bed.ogg"), loop=True), d, "guide")
+    return s.card("guide", d, music("guide_bed.ogg"), loop=True, card_kind="guide")
 
 
 # --- Local weather ---
@@ -815,8 +823,7 @@ def weather(data, place, now=None, season=None):
     end_x = min(1000 - 120.0 * d, -crawl_width(crawl))  # the whole line crosses in time
     s.raw(0, d, f"\\an4\\move(1010,544,{end_x:.0f},544)\\clip(0,488,{W},{H})\\fn{BARLOW_S}\\fs38"
                 f"\\c{WHITE}\\bord0\\shad0\\fad({frame_fade[0]},{frame_fade[1]})", esc(crawl), layer=3)
-    return Card(lavfi_url(s.write("weather"), d, music("weather_bed.ogg"), background=WEATHER_BACKGROUND),
-                d, "weather")
+    return s.card("weather", d, music("weather_bed.ogg"), background=WEATHER_BACKGROUND, card_kind="weather")
 
 
 # --- Titles ---
