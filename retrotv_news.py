@@ -32,6 +32,8 @@ import xml.etree.ElementTree as ET
 
 import anthropic
 
+import retrotv_health as health
+
 from retrotv_blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
                             riff_key, _seen as aired_lately)
 from retrotv_meta import air_date, artist_key, music_credit, popup_key
@@ -236,15 +238,20 @@ def ask(system, content, schema):
     """Claude's answer to content, as the JSON object the schema describes."""
     with open(KEY_FILE) as f:
         client = anthropic.Anthropic(api_key=f.read().strip(), timeout=180.0)
-    response = client.beta.messages.create(
-        model=MODEL,
-        max_tokens=16000,
-        betas=["server-side-fallback-2026-07-01"],
-        fallbacks="default",   # a request the model declines is re-run on the model Anthropic picks for it
-        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": schema}},
-        system=system,
-        messages=[{"role": "user", "content": content}],
-    )
+    try:
+        response = client.beta.messages.create(
+            model=MODEL,
+            max_tokens=16000,
+            betas=["server-side-fallback-2026-07-01"],
+            fallbacks="default",   # a request the model declines is re-run on the model Anthropic picks for it
+            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": schema}},
+            system=system,
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception as e:
+        health.record("claude", False, e)
+        raise
+    health.record("claude", True)
     usage = response.usage
     logger.info(f"{response.model}: {usage.input_tokens} tokens in, {usage.output_tokens} out "
                 f"(request {response._request_id})")
@@ -651,13 +658,15 @@ def sky_tonight():
 
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
-    failed = False
+    health.install("news")
+    failed = []
     for step in (quip_headlines, riff_shows, sky_tonight, pick_anniversaries, draw_art, popup_facts):
         try:
             step()
-        except Exception:   # one step failing doesn't keep the other from running
+        except Exception as e:   # one step failing doesn't keep the other from running
             logger.exception(f"{step.__name__} failed")
-            failed = True
+            failed.append(f"{step.__name__}: {e}")
+    health.record("news-job", not failed, "; ".join(failed))
     sys.exit(1 if failed else 0)
 
 

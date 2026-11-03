@@ -1,31 +1,46 @@
 """
-Live scores: while games are on, a SCORES lower third crawls them across a show, right to left, the home
-teams' games first and in mustard. The scores come from ESPN's public scoreboard (unofficial, no key)
-and are fetched only when a crawl is about to air, so they're never more than a couple of minutes old.
-Standard library only.
+Live scores: while games are on, a large SCORES lower third shows them over a show one game at a time, with the teams'
+logos, the home teams' games first and in mustard. The scores come from ESPN's public scoreboard (unofficial, no key)
+and are fetched only when the card is about to air, so they're never more than a couple of minutes old. Logos are
+downloaded once and kept. Standard library, plus ffmpeg to size the logos.
 """
 import json
 import logging
+import os
 import re
+import subprocess
 import time
 import urllib.request
 
-from retrotv_alerts import CAPS_CHAR, CRAWL_SPEED, LABEL_TEXT, UNDERLINE
-from retrotv_cards import ARCHIVO, BARLOW_X, CREAM, MUSTARD, Script, esc, rect, slanted_bar, text_width
+from retrotv_alerts import LABEL_TEXT, UNDERLINE
+from retrotv_art import download_image
+from retrotv_cards import ARCHIVO, BARLOW_X, CREAM, FONTS_DIR, H, MUSTARD, Script, W, rect, rounded, slanted_bar
+from retrotv_cards import fit as cards_fit
 from retrotv_events import BAR_RIGHT
-from retrotv_screens import USER_AGENT
+from retrotv_screens import DATA_DIR, USER_AGENT
 
 logger = logging.getLogger("RetroTV")
 
 SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
 SPORTS = {"nfl": "football", "nba": "basketball", "nhl": "hockey", "mlb": "baseball"}
-FRESH_SECONDS = 120         # scores older than this are fetched again before a crawl
-LABEL = "SCORES"
+FRESH_SECONDS = 120         # scores older than this are fetched again before a card
 BAR_COLOR = "&H00201810&"   # the NEXT / LATER lower thirds' bar
-TOP, HEIGHT = 462, 62       # where the lower thirds sit
-SIZE = 46
-SPACE_CHAR = 0.15           # a space's width as a fraction of the size, as rendered (letters and digits: CAPS_CHAR)
-LEAD = 0.6                  # the bar slides in before the scores start crawling
+TOP, HEIGHT = 414, 110      # the same bottom edge as those lower thirds, about twice as tall
+SLANT = 22
+TAG_WIDTH = 176             # the mustard box with the league and the game's clock
+FIRST_TEAM_X, TEAM_WIDTH = 214, 256
+CHIP = 86                   # the cream plate behind a logo: ESPN's are drawn for a light background
+SCORE_SIZE, NAME_SIZE = 56, 38
+FRAME_W, FRAME_H = 342, 200 # the picture at the point in the chain the filter joins it, after the CRT crunch
+PAGE_SECONDS = 6.0          # each game this long
+LEAD = 0.6                  # the bar slides in before the first game shows
+LOGO_DIR = os.path.join(DATA_DIR, "team_logos")
+LOGO_HOST = "espncdn.com"
+LOGO_PIXELS = 25            # of the 342x200 picture
+LOGO_MAX_BYTES = 3 * 1024 * 1024
+LOGO_RETRY_SECONDS = 3600
+LOGO_FILTER = f"scale={LOGO_PIXELS}:{LOGO_PIXELS}:force_original_aspect_ratio=decrease:flags=lanczos,format=rgba"
+_logo_failed = {}           # file -> when it last couldn't be downloaded
 
 
 class Scoreboard:
@@ -49,7 +64,11 @@ class Scoreboard:
         order = list(self.teams)
         return sorted(self.games, key=lambda g: (not g["ours"], order.index(g["league"])))
 
-    def _fetch(self, league, team):
+    def today(self):
+        """Every game on today's scoreboards, whatever its state, to try the card out when none are live."""
+        return [g for league, team in self.teams.items() for g in self._fetch(league, team, ("pre", "in", "post"))]
+
+    def _fetch(self, league, team, states=("in",)):
         try:
             req = urllib.request.Request(SCOREBOARD_URL.format(sport=SPORTS[league], league=league),
                                          headers={"User-Agent": USER_AGENT})
@@ -63,18 +82,19 @@ class Scoreboard:
         if league in self.failing:
             logger.info(f"Scores: the {league.upper()} scoreboard is back")
             self.failing.discard(league)
-        return live_games(league, team, data)
+        return live_games(league, team, data, states)
 
 
-def live_games(league, team, data):
-    """The in-progress games on one league's scoreboard: away side first, as the tickers had them."""
+def live_games(league, team, data, states=("in",)):
+    """The in-progress games on one league's scoreboard: away side first, as the tickers had them. Each side is
+    (abbreviation, score, logo URL)."""
     games = []
     for event in data.get("events", []):
         status = event.get("status", {}).get("type", {})
-        if status.get("state") != "in":
+        if status.get("state") not in states:
             continue
         try:
-            sides = {c["homeAway"]: (c["team"]["abbreviation"], str(c.get("score", "0")))
+            sides = {c["homeAway"]: (c["team"]["abbreviation"], str(c.get("score", "0")), c["team"].get("logo"))
                      for c in event["competitions"][0]["competitors"]}
             away, home = sides["away"], sides["home"]
         except (KeyError, IndexError, TypeError):
@@ -86,78 +106,105 @@ def live_games(league, team, data):
     return games
 
 
+# --- Team logos ---
+
+def logo_file(league, abbreviation, url):
+    """A team's logo sized for the card, downloaded once from ESPN. None for now if it can't be had: the card goes without."""
+    name = re.sub(r"[^a-z0-9]", "", abbreviation.lower())
+    path = os.path.join(LOGO_DIR, f"{league}-{name}.png")
+    if os.path.exists(path):
+        return path
+    if not name or not url or time.time() - _logo_failed.get(path, 0) < LOGO_RETRY_SECONDS:
+        return None
+    try:
+        download_image(url, (LOGO_HOST,), path, LOGO_FILTER, LOGO_MAX_BYTES)
+        return path
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        logger.warning(f"Scores: no logo for {abbreviation} ({e})")
+        _logo_failed[path] = time.time()
+        return None
+
+
+def logos_for(games):
+    """{(league, abbreviation): file} for the games' teams, as far as they can be had."""
+    logos = {}
+    for g in games:
+        for side in (g["away"], g["home"]):
+            found = logo_file(g["league"], side[0], side[2] if len(side) > 2 else None)
+            if found:
+                logos[g["league"], side[0]] = found
+    return logos
+
+
 # --- On screen ---
 
-def _pieces(games):
-    """(text, color) runs: each league's name in orange before its games, the home teams' games in mustard."""
-    pieces, league = [], None
-    for g in games:
-        if g["league"] != league:
-            if league:
-                pieces.append(("      ", CREAM))
-            pieces.append((g["league"].upper() + "   ", UNDERLINE))
-            league = g["league"]
-        else:
-            pieces.append(("   ·   ", CREAM))
-        (a, a_score), (h, h_score) = g["away"], g["home"]
-        pieces.append((f"{a} {a_score}  {h} {h_score}  {g['detail'].upper()}", MUSTARD if g["ours"] else CREAM))
-    return pieces
-
-
-def _geometry():
-    """The label box's width (as the promo sizes it) and the stretch the scores crawl through."""
-    tag = max(150, int(text_width(LABEL, ARCHIVO, 40)) + 48)
-    return tag, 40 + tag - 22, BAR_RIGHT
-
-
-def _width(pieces):
-    """The text's width as rendered, a few percent generous so it's always clear of the bar at the end."""
-    text = "".join(t for t, _ in pieces)
-    spaces = text.count(" ")
-    return ((len(text) - spaces) * CAPS_CHAR * 1.06 + spaces * SPACE_CHAR) * SIZE * 1.03
-
-
-def _timing(pieces):
-    """(seconds the text takes to cross, seconds on screen in all)."""
-    _, left, right = _geometry()
-    crawl = (right - left + _width(pieces)) / CRAWL_SPEED
-    return crawl, round(LEAD + crawl + 0.5, 2)
+def seconds_for(count):
+    return round(LEAD + count * PAGE_SECONDS + 0.5, 2)
 
 
 def fit(games, max_seconds):
-    """(games, seconds on screen) for a crawl, dropping games off the end to keep it within max_seconds."""
-    while True:
-        _, d = _timing(_pieces(games))
-        if d <= max_seconds or len(games) == 1:
-            return games, d
+    """(games, seconds on screen) for a card, dropping games off the end to keep it within max_seconds."""
+    while len(games) > 1 and seconds_for(len(games)) > max_seconds:
         games = games[:-1]
+    return games, seconds_for(len(games))
 
 
-def ticker_script(games, start):
-    """An ASS file for the vf chain: the NEXT lower third's bar, full length, with a SCORES label box and
-    the games crawling through it right to left from file time `start`. Returns its path."""
-    tag, left, right = _geometry()
-    pieces = _pieces(games)
-    width = _width(pieces)
-    crawl, d = _timing(pieces)
-    end = start + d
-    y = TOP + HEIGHT / 2
-    shift = right + 40   # everything slides in together from off the left edge
+def _frame_x(x):
+    return round(x * FRAME_W / W)
 
-    def slide(x, yy):
-        return f"\\move({x - shift},{yy},{x},{yy},0,450)"
+
+def _frame_y(y):
+    return round(y * FRAME_H / H)
+
+
+def board_filter(games, start, logos):
+    """The score card for the vf chain, from file time `start`: a large lower third (the same bottom edge as the NEXT
+    one, reaching higher), showing the games one at a time, each team as its logo, score and name:
+
+        [ NHL SCORES ]  (logo)  3        (logo)  1
+        [ 3RD 12:04  ]  (logo)  TB       (logo)  BOS
+
+    Pictures can't go in an ASS script, so the logos are laid over it, each only during its game."""
+    shift = BAR_RIGHT + 40   # everything slides in together from off the left edge
+    bar_end = start + LEAD + len(games) * PAGE_SECONDS + 0.3
+
+    def slide(x, y):
+        return f"\\move({x - shift},{y},{x},{y},0,450)"
     s = Script()
-    s.shape(start, end, 40, TOP, slanted_bar(right - 40, HEIGHT, 22), BAR_COLOR, fade=(0, 300), layer=1,
-            extra=slide(40, TOP) + "\\1a&H30&")
-    s.shape(start, end, 40, TOP, slanted_bar(tag, HEIGHT, 22), MUSTARD, fade=(0, 300), layer=3,
-            extra=slide(40, TOP))
-    s.shape(start, end, 40, TOP + HEIGHT + 2, rect(right - 40 - 22, 5), UNDERLINE, fade=(0, 300), layer=3,
+    s.shape(start, bar_end, 40, TOP, slanted_bar(BAR_RIGHT - 40, HEIGHT, SLANT), BAR_COLOR, fade=(0, 300), layer=1,
+            extra=slide(40, TOP) + "\\1a&H20&")
+    s.shape(start, bar_end, 40, TOP, slanted_bar(TAG_WIDTH, HEIGHT, SLANT), MUSTARD, fade=(0, 300), layer=2, extra=slide(40, TOP))
+    s.shape(start, bar_end, 40, TOP + HEIGHT + 2, rect(BAR_RIGHT - 40 - SLANT, 5), UNDERLINE, fade=(0, 300), layer=2,
             extra=slide(40, TOP + HEIGHT + 2))
-    s.text(start, end, 62, y, LABEL, ARCHIVO, 40, LABEL_TEXT, align=4, fade=(0, 300), layer=4,
-           extra=slide(62, y))
-    # Kept inside the bar, slanted end and all; it slips under the label box on its way out
-    clip = f"m {left} {TOP} l {right} {TOP} l {right - 22} {TOP + HEIGHT} l {left} {TOP + HEIGHT}"
-    tags = (f"\\an4\\move({right},{y:.0f},{left - width:.0f},{y:.0f},{LEAD * 1000:.0f},{(LEAD + crawl) * 1000:.0f})"
-            f"\\fn{BARLOW_X}\\fs{SIZE}\\bord0\\shad0\\fad(0,300)\\clip({clip})")
-    s.raw(start, end, tags, "".join(f"{{\\c{color}}}{esc(text)}" for text, color in pieces), layer=2)
-    return s.write("scores")
+    sources, stages, label = [], [], "base"
+    room = (TAG_WIDTH - SLANT - 22) * 1.45    # fit's estimates run wide
+    for i, g in enumerate(games):
+        a = start + LEAD + i * PAGE_SECONDS
+        b = a + PAGE_SECONDS
+        fade = (120, 120)
+        title = f"{g['league'].upper()} SCORES"
+        detail = g["detail"].upper()
+        s.text(a, b, 54, TOP + 36, title, BARLOW_X, cards_fit(title, BARLOW_X, 40, room), LABEL_TEXT, align=4, fade=fade, layer=3)
+        s.text(a, b, 54, TOP + 78, detail, BARLOW_X, cards_fit(detail, BARLOW_X, 40, room), LABEL_TEXT, align=4, fade=fade, layer=3)
+        color = MUSTARD if g["ours"] else CREAM
+        for j, side in enumerate((g["away"], g["home"])):
+            x = FIRST_TEAM_X + j * TEAM_WIDTH
+            has_logo = (g["league"], side[0]) in logos
+            s.shape(a, b, x, TOP + (HEIGHT - CHIP) / 2, rounded(CHIP, CHIP, 10), CREAM, fade=fade, layer=3)
+            if not has_logo:   # no logo to hand: the team's letters on the same plate
+                s.text(a, b, x + CHIP / 2, TOP + HEIGHT / 2, side[0], BARLOW_X, cards_fit(side[0], BARLOW_X, 44, CHIP - 8), LABEL_TEXT, fade=fade, layer=4)
+            middle = x + CHIP + (TEAM_WIDTH - CHIP - 8) / 2
+            s.text(a, b, middle, TOP + 40, str(side[1]), ARCHIVO, SCORE_SIZE, color, fade=fade, layer=3)
+            s.text(a, b, middle, TOP + 88, side[0], BARLOW_X, NAME_SIZE, color, fade=fade, layer=3)
+            if has_logo:
+                source = f"logo{len(sources)}"
+                sources.append(f"movie={logos[g['league'], side[0]]}[{source}]")
+                following = f"v{len(sources)}"
+                stages.append(f"[{label}][{source}]overlay=x={_frame_x(x + CHIP / 2)}-w/2:y={_frame_y(TOP + HEIGHT / 2)}-h/2:"
+                              f"enable='between(t,{a + 0.06:.2f},{b - 0.06:.2f})'[{following}]")
+                label = following
+    text = f"ass=filename={s.write('scores')}:fontsdir={FONTS_DIR}"
+    if not stages:
+        return f"lavfi=[{text}]"
+    stages[-1] = stages[-1][:-len(f"[{label}]")]   # the last stage feeds mpv
+    return "lavfi=[" + ";".join(sources + [f"[in]{text}[base]"] + stages) + "]"

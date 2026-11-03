@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#16110d">
+<title>G|TV Scheduler</title>
+<style>
+@font-face { font-family: "Archivo Black"; src: url(/fonts/ArchivoBlack-Regular.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 600; src: url(/fonts/BarlowCondensed-SemiBold.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 700; src: url(/fonts/BarlowCondensed-Bold.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 800; src: url(/fonts/BarlowCondensed-ExtraBold.ttf); }
+/* The remote's look: the bumper's warm near-black, cream type, mustard accents */
+:root {
+  --bg: #16110d; --grid: #211912; --panel: #2b2017; --raise: #3a2b1e; --line: #3d2c1e; --edge: #7a5232;
+  --white: #efe6d2; --sky: #c4ad88; --mustard: #e8b33a; --warn: #ff7a4d; --ink: #16110d;
+  --g4: #f2b33d; --kids: #6fc3e6; --sitcom: #efd48a; --drama: #a9cf8a; --late: #a897e0; --tape: #e8957f; --movie: #d9534a; --music: #2fa39c;
+  --row: 25px; --gutter: 58px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--white); }
+body { font: 600 16px/1.2 "Barlow Condensed", system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; }
+button, input { font: inherit; color: inherit; }
+button { background: var(--raise); border: 1px solid var(--edge); padding: 4px 10px; cursor: pointer; }
+button:hover:not(:disabled) { background: var(--edge); }
+button:disabled { opacity: .45; cursor: default; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--mustard); outline-offset: 1px; }
+button.primary { background: var(--mustard); color: var(--ink); border-color: var(--mustard); font-weight: 800; }
+input { background: var(--grid); border: 1px solid var(--line); padding: 5px 8px; width: 100%; min-width: 0; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 14px; border-bottom: 3px solid var(--mustard); }
+.logo { font-family: "Archivo Black"; font-size: 24px; transform: skewX(-9deg); color: var(--mustard); text-decoration: none; }
+.stats { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--sky); flex: 1; min-width: 200px; }
+.stats b { color: var(--white); font-weight: 800; font-variant-numeric: tabular-nums; }
+.stats .bad b { color: var(--warn); }
+.actions { display: flex; gap: 6px; align-items: center; }
+#status { color: var(--sky); }
+#status.err { color: var(--warn); }
+.notice { background: #5a1c12; padding: 4px 14px; font-size: 15px; }
+main { flex: 1; display: grid; grid-template-columns: minmax(280px, 340px) minmax(0, 1fr); min-height: 0; }
+aside { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1.25fr); min-height: 0; min-width: 0; border-right: 1px solid var(--edge); }
+.pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; padding: 8px 10px; gap: 6px; }
+.pane + .pane { border-top: 1px solid var(--edge); }
+.pane h2 { font: 400 15px "Archivo Black"; margin: 0; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.pane h2 button { font: 600 14px "Barlow Condensed", system-ui, sans-serif; padding: 2px 8px; }
+.filters { display: flex; flex-wrap: wrap; gap: 3px; }
+.filters button { padding: 1px 7px; font-size: 14px; }
+.filters button[aria-pressed="true"] { background: var(--mustard); color: var(--ink); }
+.filters #onlyfree { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+#onlyfree svg { width: 13px; height: 13px; fill: currentColor; }
+.empty { color: var(--sky); padding: 8px 6px; }
+.note { color: var(--sky); padding: 2px 6px 6px; font-size: 15px; }
+.stack { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.about { color: var(--sky); font-size: 14px; line-height: 1.15; }
+.tip { position: fixed; z-index: 20; max-width: 380px; padding: 9px 13px; background: var(--bg); color: var(--white); border: 2px solid var(--mustard);
+  font-size: 19px; line-height: 1.3; white-space: pre-line; pointer-events: none; box-shadow: 0 4px 14px #000c; }
+.tip b { display: block; color: var(--mustard); font-weight: 800; font-size: 21px; }
+.hold { color: var(--warn); font-size: 14px; font-weight: 800; white-space: nowrap; }
+.list { overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 2px; }
+.row { display: flex; align-items: center; gap: 6px; padding: 3px 6px; background: var(--panel); cursor: grab; user-select: none; -webkit-user-select: none; }
+.row:hover { background: var(--raise); }
+.grip { color: var(--sky); touch-action: none; padding: 2px 3px; cursor: grab; }
+.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { color: var(--sky); font-size: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.swatch { width: 11px; height: 11px; flex: none; border: 0; padding: 0; }
+.card { background: var(--panel); border: 1px solid transparent; }
+.card.over { border-color: var(--mustard); background: var(--raise); }
+.card .row { background: none; }
+.detail { padding: 2px 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; background: var(--grid); padding: 1px 2px 1px 7px; font-size: 14px; max-width: 100%; }
+.chip.missing { color: var(--warn); }
+.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip button { border: 0; background: none; padding: 0 5px; }
+.drop-new { border: 1px dashed var(--edge); padding: 8px; text-align: center; color: var(--sky); }
+.drop-new.over { border-color: var(--mustard); color: var(--white); }
+.colors { display: flex; gap: 4px; }
+.colors button { width: 18px; height: 18px; padding: 0; border: 2px solid transparent; }
+.colors button[aria-pressed="true"] { border-color: var(--white); }
+.inline { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.board { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.selbar { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 6px 12px; background: var(--panel); border-bottom: 1px solid var(--edge); min-height: 40px; color: var(--sky); }
+.selbar .what { color: var(--white); font-weight: 800; }
+.days { display: flex; gap: 2px; }
+.days button { width: 34px; padding: 3px 0; font-size: 14px; }
+.days button[aria-pressed="true"] { background: var(--mustard); color: var(--ink); }
+.warnline { color: var(--warn); }
+.scroller { overflow: auto; flex: 1; min-height: 0; background: var(--grid); }
+.week { display: grid; grid-template-columns: var(--gutter) repeat(7, minmax(108px, 1fr)); min-width: 820px; }
+.head { position: sticky; top: 0; z-index: 4; background: var(--bg); text-align: center; font: 400 14px "Archivo Black"; padding: 5px 0; border-bottom: 2px solid var(--mustard); }
+.head.corner { left: 0; z-index: 5; }
+.times { position: sticky; left: 0; z-index: 3; background: var(--grid); }
+.time { height: var(--row); font-size: 14px; color: var(--sky); padding: 3px 0 0 6px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.col { position: relative; border-left: 1px solid var(--line); height: calc(var(--row) * 34);
+  background-image: repeating-linear-gradient(to bottom, var(--edge) 0 1px, transparent 1px var(--row), var(--line) var(--row) calc(var(--row) + 1px), transparent calc(var(--row) + 1px) calc(var(--row) * 2)); }
+.block { position: absolute; left: 0; right: 0; background: rgba(232, 179, 58, .09); border-top: 1px solid var(--mustard); border-bottom: 1px solid var(--mustard); }
+.strip { position: absolute; left: 0; top: 0; bottom: 0; width: 17px; background: var(--raise); color: var(--mustard); writing-mode: vertical-rl; font-size: 13px; line-height: 17px; overflow: hidden; white-space: nowrap; padding-top: 3px; cursor: pointer; }
+.block.selected .strip, .block.over .strip { background: var(--mustard); color: var(--ink); }
+.typeline { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 6px 12px; border-bottom: 1px solid var(--edge); }
+.typeline input { flex: 1 1 260px; }
+#parsed { color: var(--sky); flex: 1 1 220px; min-width: 0; }
+#parsed.err { color: var(--warn); }
+.slot { position: absolute; left: 19px; right: 2px; color: var(--ink); padding: 2px 5px; overflow: hidden; cursor: grab; touch-action: none; font-size: 15px; line-height: 1.05; user-select: none; -webkit-user-select: none; border-radius: 1px; }
+.slot.selected { outline: 2px solid var(--white); outline-offset: 0; z-index: 2; }
+.slot.c-movie, .slot.c-music { color: #fff8f0; }
+.slot.short { white-space: nowrap; text-overflow: ellipsis; }
+.slot.short > span:first-child { display: block; overflow: hidden; text-overflow: ellipsis; }
+.slot .warnmark { position: absolute; right: 3px; top: 2px; background: var(--ink); color: var(--warn); width: 15px; height: 15px; text-align: center; font-size: 13px; line-height: 15px; font-weight: 800; }
+.slot .resize { position: absolute; left: 0; right: 0; bottom: 0; height: 7px; cursor: ns-resize; touch-action: none; }
+.slot .resize::after { content: ""; position: absolute; left: 40%; right: 40%; bottom: 2px; height: 2px; background: currentColor; opacity: .5; }
+.preview { position: absolute; left: 19px; right: 2px; background: rgba(232, 179, 58, .35); border: 2px solid var(--mustard); pointer-events: none; z-index: 3; }
+.ghost { position: fixed; z-index: 10; pointer-events: none; background: var(--mustard); color: var(--ink); padding: 3px 9px; font-weight: 800; box-shadow: 0 2px 8px #000a; max-width: 240px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c-g4 { background: var(--g4); } .c-kids { background: var(--kids); } .c-sitcom { background: var(--sitcom); } .c-drama { background: var(--drama); }
+.c-late { background: var(--late); } .c-tape { background: var(--tape); } .c-movie { background: var(--movie); } .c-music { background: var(--music); }
+body.dragging { cursor: grabbing; }
+body.dragging * { cursor: grabbing !important; }
+@media (max-width: 760px) {
+  body { overflow: auto; height: auto; }
+  html { height: auto; }
+  main { display: flex; flex-direction: column; }
+  aside { grid-template-rows: 300px 340px; border-right: 0; }
+  .scroller { max-height: 80vh; }
+}
+</style>
+</head>
+<body>
+<div class="bar">
+  <a class="logo" href="/">G|TV</a>
+  <div class="stats" id="stats"></div>
+  <div class="actions">
+    <span id="status"></span>
+    <button id="undo" disabled>Undo</button>
+    <button id="save" class="primary" disabled>Save</button>
+  </div>
+</div>
+<div class="notice" id="notice"></div>
+<main>
+  <aside>
+    <section class="pane">
+      <h2>Library <button id="rescan">Rescan NAS</button></h2>
+      <input id="search" type="search" placeholder="Search shows and groups" aria-label="Search shows and groups">
+      <div class="filters" id="filters"></div>
+      <div class="list" id="library"></div>
+    </section>
+    <section class="pane">
+      <h2>Groups</h2>
+      <div class="drop-new" id="newgroup">Drop a show here for a new group, or <button id="addgroup">add an empty one</button></div>
+      <div class="list" id="groups"></div>
+    </section>
+  </aside>
+  <section class="board">
+    <div class="typeline">
+      <input id="blockline" placeholder="Type a block: Mon-Fri 9am-12pm Kids Mornings" aria-label="Type a block: days, times, then its name">
+      <button id="addblock">Add block</button>
+      <span id="parsed"></span>
+    </div>
+    <div class="selbar" id="selbar"></div>
+    <div class="scroller" id="scroller"><div class="week" id="week"></div></div>
+  </section>
+</main>
+<script>
+"use strict";
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const FIRST = 9, LAST = 26, ROWS = (LAST - FIRST) * 2;
+const COLORS = ["g4", "kids", "sitcom", "drama", "late", "tape", "movie", "music"];
+const FILTERS = [["all", "All"], ["shows", "Shows"], ["g4", "G4"], ["movies", "Movies"], ["tapes", "Tapes"], ["specials", "Music & specials"]];
+const KINDS_COLOR = { g4: "g4", movies: "movie", tapes: "tape", specials: "music" };
+const LONG_MS = 5000;
+
+let doc = null, version = 0, items = {}, rules = { kids_end: 21, late_start: 22 };
+let history = [], dirty = false, selected = null, selectedBlock = null, expanded = new Set(), filter = "all", onlyFree = false, drag = null, nextId = 1;
+
+const $ = id => document.getElementById(id);
+function el(tag, props, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === "class") node.className = v;
+    else if (k === "text") node.textContent = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (k === "style") node.style.cssText = v;
+    else node.setAttribute(k, v);
+  }
+  node.append(...kids.filter(Boolean));
+  return node;
+}
+function clock(h) {
+  const hour = Math.floor(h) % 24, m = h % 1 ? "30" : "00";
+  return `${hour % 12 || 12}:${m} ${hour < 12 ? "AM" : "PM"}`;
+}
+const groupOf = id => doc.groups.find(g => g.id === id);
+const hours = s => s.end - s.start;
+
+/* --- Changes --- */
+function remember() {
+  history.push(JSON.stringify({ groups: doc.groups, slots: doc.slots, blocks: doc.blocks }));
+  if (history.length > 100) history.shift();
+  dirty = true;
+}
+function undo() {
+  if (!history.length) return;
+  Object.assign(doc, JSON.parse(history.pop()));
+  selected = selectedBlock = null;
+  dirty = history.length > 0 || dirty;
+  render();
+}
+/* Puts a slot on the board. It wins: whatever it overlaps is trimmed, split or removed. */
+function place(day, start, end, group, skip) {
+  const out = [];
+  for (const s of doc.slots) {
+    if (s === skip) { out.push(s); continue; }
+    if (s.day !== day || s.end <= start || s.start >= end) { out.push(s); continue; }
+    if (s.start < start) out.push({ ...s, end: start });
+    if (s.end > end) out.push({ ...s, start: end });
+  }
+  const slot = skip || { day, start, end, group };
+  Object.assign(slot, { day, start, end, group });
+  if (!skip) out.push(slot);
+  doc.slots = out;
+  return slot;
+}
+function occupant(day, h) { return doc.slots.find(s => s.day === day && s.start <= h && h < s.end); }
+function gapAfter(day, h) {
+  const next = doc.slots.filter(s => s.day === day && s.start > h).map(s => s.start);
+  return Math.min(LAST, ...next) - h;
+}
+/* How long a group wants: its longest show plus room for breaks, on the half hour. */
+function naturalLength(group) {
+  const minutes = group.items.map(i => (items[i] || {}).minutes || 0);
+  const longest = Math.max(0, ...minutes);
+  return Math.min(LAST - FIRST, Math.max(0.5, Math.ceil(longest / 0.8 / 30) / 2));
+}
+function dropGroup(group, day, h) {
+  remember();
+  const there = occupant(day, h);
+  selected = there ? place(day, there.start, there.end, group.id)
+                   : place(day, h, h + Math.min(naturalLength(group), gapAfter(day, h)), group.id);
+  render();
+}
+function newGroup(item) {
+  const info = item ? items[item] : null;
+  const group = {
+    id: "g" + Date.now().toString(36) + (nextId++), name: info ? info.name : "New group", items: item ? [item] : [], mode: "in_order",
+    color: info ? (KINDS_COLOR[info.kind] || ((info.ratings.kids || 0) > info.files / 2 ? "kids" : (info.ratings.late || 0) > info.files / 2 ? "late" : "sitcom")) : "sitcom",
+  };
+  doc.groups.unshift(group);
+  return group;
+}
+function addToGroup(group, item) {
+  if (group.items.includes(item)) return;
+  remember();
+  group.items.push(item);
+  render();
+}
+
+/* --- Typed blocks --- */
+const DAY_WORD = "(?:mon(?:day)?|tue(?:s|sday)?|wed(?:s|nesday)?|thu(?:r|rs|rsday)?|fri(?:day)?|sat(?:urday)?|sun(?:day)?)";
+const DAY_LIST = `(?:weekdays?|weekends?|every ?day|daily|nightly|${DAY_WORD}(?:\\s*(?:-|–|to|,|&|and|/|\\s)\\s*${DAY_WORD})*)`;
+const TIME_WORD = "(?:noon|midnight|\\d{1,2}(?::\\d{2})?\\s*(?:am|pm|a|p)?)";
+const TIME_RANGE = new RegExp(`\\b(${TIME_WORD})\\s*(?:-|–|to)\\s*(${TIME_WORD})(?![\\w:])`, "i");
+const dayIndex = word => ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].indexOf(word.slice(0, 3).toLowerCase());
+
+function parseDays(text) {
+  const t = text.toLowerCase().trim();
+  if (/^weekdays?$/.test(t)) return [0, 1, 2, 3, 4];
+  if (/^weekends?$/.test(t)) return [5, 6];
+  if (/^(every ?day|daily|nightly)$/.test(t)) return [0, 1, 2, 3, 4, 5, 6];
+  const days = new Set();
+  const re = new RegExp(`(${DAY_WORD})(?:\\s*(?:-|–|to)\\s*(${DAY_WORD}))?`, "gi");
+  for (const m of t.matchAll(re)) {
+    const a = dayIndex(m[1]), b = m[2] ? dayIndex(m[2]) : a;
+    for (let d = a; ; d = (d + 1) % 7) { days.add(d); if (d === b) break; }
+  }
+  return [...days].sort();
+}
+/* One clock reading as a broadcast hour (9 to 26). No am/pm means whichever is on the air: 9 to 12 by day, 1 to 8 PM. */
+function broadcastHour(word, fallback) {
+  const t = word.toLowerCase().trim();
+  if (t === "noon") return 12;
+  if (t === "midnight") return 24;
+  const m = t.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a|p)?$/);
+  if (!m) return null;
+  let hour = Number(m[1]);
+  const minutes = Number(m[2] || 0), suffix = (m[3] || fallback || "")[0];
+  if (hour > 12 && hour <= 26 && !suffix) return hour + minutes / 60;
+  if (hour < 1 || hour > 12 || minutes > 59) return null;
+  if (suffix === "a") hour = hour === 12 ? 24 : hour < FIRST ? hour + 24 : hour;
+  else if (suffix === "p") hour = hour === 12 ? 12 : hour + 12;
+  else if (hour < FIRST) hour += 12;
+  return hour + minutes / 60;
+}
+/* "Mon-Fri 9am-12pm Kids Mornings", in most any order: {days, start, end, name}, or {error}. */
+function parseBlock(text) {
+  const line = text.trim();
+  if (!line) return { error: "" };
+  const range = line.match(TIME_RANGE);
+  if (!range) return { error: "Needs a time range, like 9am-12pm" };
+  let before = line.slice(0, range.index).trim(), after = line.slice(range.index + range[0].length).trim();
+  let days = null;
+  const tries = [[new RegExp(`\\b(${DAY_LIST})[\\s,:]*$`, "i"), "before"], [new RegExp(`^(${DAY_LIST})\\b[\\s,:]*`, "i"), "before"], [new RegExp(`^(${DAY_LIST})\\b[\\s,:]*`, "i"), "after"]];
+  for (const [re, where] of tries) {
+    const source = where === "before" ? before : after;
+    const m = source.match(re);
+    if (m) {
+      days = parseDays(m[1]);
+      if (where === "before") before = before.replace(re, "").trim(); else after = after.replace(re, "").trim();
+      break;
+    }
+  }
+  const suffix = w => (w.toLowerCase().match(/(am|pm|a|p)\s*$/) || [])[1];
+  let start = broadcastHour(range[1], null), end = broadcastHour(range[2], null);
+  // "6-10pm": the start takes the end's am/pm when that puts it before the end
+  if (!suffix(range[1]) && suffix(range[2])) {
+    const same = broadcastHour(range[1], suffix(range[2]));
+    if (same !== null && same < end) start = same;
+  }
+  if (start === null || end === null) return { error: "Can't read that time range" };
+  // "6-10": a bare end before its start is later the same day
+  if (!suffix(range[2]) && end <= start && end + 12 > start) end += 12;
+  if (Math.round(start * 2) !== start * 2 || Math.round(end * 2) !== end * 2) return { error: "Times go on the half hour" };
+  if (start < FIRST || end > LAST || end <= start) return { error: `Blocks fit between ${clock(FIRST)} and ${clock(LAST)}` };
+  const name = [before, after].filter(Boolean).join(" ").replace(/^[\s:,-]+|[\s:,-]+$/g, "").slice(0, 60);
+  if (!name) return { error: "Give it a name, like Kids Mornings" };
+  return { days: days && days.length ? days : [0, 1, 2, 3, 4, 5, 6], start, end, name };
+}
+function daysText(days) {
+  const list = [...days].sort();
+  if (list.length === 7) return "Every day";
+  if (list.join() === "0,1,2,3,4") return "Mon-Fri";
+  if (list.join() === "5,6") return "Sat-Sun";
+  return list.map(d => DAYS[d]).join(",");
+}
+function shortClock(h) {
+  const hour = Math.floor(h) % 24, m = h % 1 ? ":30" : "";
+  return `${hour % 12 || 12}${m}${hour < 12 ? "am" : "pm"}`;
+}
+const blockText = b => `${daysText(b.days)} ${shortClock(b.start)}-${shortClock(b.end)} ${b.name}`;
+/* A new block wins its days: an older one it overlaps gives those days up. */
+function clearBlockDays(b) {
+  for (const other of doc.blocks) {
+    if (other !== b && other.start < b.end && b.start < other.end) other.days = other.days.filter(d => !b.days.includes(d));
+  }
+  doc.blocks = doc.blocks.filter(o => o === b || o.days.length);
+}
+function addBlock() {
+  const parsed = parseBlock($("blockline").value);
+  if (parsed.error !== undefined) { showParsed(); return; }
+  remember();
+  const editing = selectedBlock && doc.blocks.includes(selectedBlock);
+  const block = editing ? Object.assign(selectedBlock, parsed) : { id: "b" + Date.now().toString(36) + (nextId++), ...parsed };
+  if (!editing) doc.blocks.push(block);
+  clearBlockDays(block);
+  selectedBlock = block;
+  selected = null;
+  $("blockline").value = "";
+  showParsed();
+  render();
+}
+function showParsed() {
+  const parsed = parseBlock($("blockline").value);
+  const out = $("parsed");
+  out.classList.toggle("err", Boolean(parsed.error));
+  out.textContent = parsed.error !== undefined ? parsed.error
+    : `${daysText(parsed.days)}, ${clock(parsed.start)} to ${clock(parsed.end)}: ${parsed.name}`;
+  $("addblock").textContent = selectedBlock ? "Update block" : "Add block";
+}
+/* A group dropped on a block's strip fills the block on all its days. */
+function fillBlock(block, group) {
+  remember();
+  for (const d of block.days) place(d, block.start, block.end, group.id);
+  selected = null;
+  selectedBlock = block;
+  render();
+}
+
+/* --- Warnings --- */
+/* The hour a show's standards rating holds it to, when every file in it has that rating. */
+function holdOf(it) {
+  if (!it.files) return null;
+  if ((it.ratings.kids || 0) === it.files) {
+    return { label: `Blocked after ${shortClock(rules.kids_end)}`, allows: h => h < rules.kids_end,
+             text: `${it.name} is a kids' show: standards stop it after ${clock(rules.kids_end)}` };
+  }
+  if ((it.ratings.late || 0) === it.files) {
+    return { label: `Blocked until ${shortClock(rules.late_start)}`, allows: h => h >= rules.late_start,
+             text: `${it.name} is late-night: standards hold it until ${clock(rules.late_start)}` };
+  }
+  return null;
+}
+function slotWarnings(s, group) {
+  const out = [];
+  for (const id of group.items) {
+    const it = items[id];
+    if (!it) { out.push(`${id} isn't in the library`); continue; }
+    if (it.kind === "specials" || !it.files) continue;
+    const hold = holdOf(it);
+    if (hold && !hold.allows(s.start)) out.push(hold.text);
+    if (group.mode === "in_order" && group.overflow !== false && it.minutes && it.minutes > hours(s) * 60) out.push(`${it.name} runs about ${it.minutes} min, longer than this ${hours(s) * 60} min slot`);
+  }
+  if (!group.items.length) out.push("This group has no shows yet");
+  return out;
+}
+function slotStats(group) {
+  const slots = doc.slots.filter(s => s.group === group.id);
+  const total = slots.reduce((a, s) => a + hours(s), 0);
+  const files = group.items.reduce((a, i) => a + ((items[i] || {}).files || 0), 0);
+  return { count: slots.length, total, files };
+}
+
+/* --- Rendering --- */
+function render() {
+  hideTip();
+  renderStats(); renderLibrary(); renderGroups(); renderWeek(); renderSelection();
+  $("undo").disabled = !history.length;
+  $("save").disabled = !dirty;
+  if (dirty && !$("status").classList.contains("err")) $("status").textContent = "Not saved";
+}
+function renderStats() {
+  const filled = doc.slots.reduce((a, s) => a + hours(s), 0);
+  let g4 = 0, warnings = 0;
+  for (const s of doc.slots) {
+    const group = groupOf(s.group);
+    const share = group.items.length ? group.items.filter(i => i.startsWith("g4/")).length / group.items.length : 0;
+    g4 += hours(s) * share;
+    if (slotWarnings(s, group).length) warnings++;
+  }
+  const total = (LAST - FIRST) * 7;
+  const unit = (b, text, bad) => el("span", bad ? { class: "bad" } : null, el("b", { text: b }), " " + text);
+  $("stats").replaceChildren(
+    unit(`${filled}/${total} h`, "filled", filled < total),
+    unit(`${g4.toFixed(1)} h`, `of G4 (${Math.round(100 * g4 / total)}%)`),
+    unit(String(doc.groups.length), "groups"),
+    unit(String(warnings), warnings === 1 ? "warning" : "warnings", warnings > 0));
+}
+function renderLibrary() {
+  const q = $("search").value.trim().toLowerCase();
+  const used = new Set(doc.groups.flatMap(g => g.items));
+  const section = Object.values(items).filter(it => (filter === "all" || it.kind === filter) && (!q || it.name.toLowerCase().includes(q)));
+  const free = section.filter(it => !used.has(it.id));
+  $("filters").replaceChildren(...FILTERS.map(([key, label]) => el("button", { text: label, "aria-pressed": String(filter === key), onclick() { filter = key; render(); } })),
+    freeToggle(free.length));
+  const rows = onlyFree ? free : section;
+  if (!rows.length) {
+    $("library").replaceChildren(el("div", { class: "empty", text: onlyFree && section.length ? "Everything here is in a group." : "Nothing matches." }));
+    return;
+  }
+  const note = filter === "specials"
+    ? el("div", { class: "note", text: "These aren't folders of shows. The station puts them together when they air. Drag one into a group like any show." }) : null;
+  $("library").replaceChildren(...(note ? [note] : []), ...rows.map(it => {
+    const hold = holdOf(it);
+    const facts = [it.files ? `${it.files} files` : "", it.minutes ? `about ${it.minutes} min each` : ""].filter(Boolean).join(", ");
+    const row = el("div", { class: "row", "data-tip": [it.name, it.about, facts, hold ? hold.text : ""].filter(Boolean).join("\n") },
+      el("span", { class: "grip", text: "⠿", "aria-hidden": "true" }),
+      it.about ? el("span", { class: "stack" }, el("span", { class: "name", text: it.name }), el("span", { class: "about", text: it.about }))
+               : el("span", { class: "name", text: it.name }),
+      hold ? el("span", { class: "hold", text: hold.label, "aria-label": hold.text }) : null,
+      el("span", { class: "meta", text: [it.files ? it.files + " files" : "", it.minutes ? `~${it.minutes}m` : ""].filter(Boolean).join(" · ") }));
+    draggable(row, () => ({ type: "item", item: it.id, label: it.name }));
+    return row;
+  }));
+}
+function freeToggle(count) {
+  const label = onlyFree ? "Show everything in this section" : "Show only what isn't in a group yet";
+  const button = el("button", { id: "onlyfree", "data-tip": label, "aria-label": `${label} (${count})`, "aria-pressed": String(onlyFree),
+    onclick() { onlyFree = !onlyFree; renderLibrary(); } }, String(count));
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  const funnel = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  funnel.setAttribute("d", "M1 2h14l-5.5 6.5V14l-3-1.5V8.5z");
+  svg.append(funnel);
+  button.prepend(svg);
+  return button;
+}
+function renderGroups() {
+  const q = $("search").value.trim().toLowerCase();
+  const list = doc.groups.filter(g => !q || g.name.toLowerCase().includes(q) || g.items.some(i => ((items[i] || {}).name || i).toLowerCase().includes(q)));
+  $("groups").replaceChildren(...list.map(group => {
+    const { count, total } = slotStats(group);
+    const open = expanded.has(group.id);
+    const shows = group.items.map(i => (items[i] || {}).name || i).join(", ");
+    const row = el("div", { class: "row", "data-tip": `${group.name}\n${shows || "No shows yet"}` },
+      el("span", { class: "grip", text: "⠿", "aria-hidden": "true" }),
+      el("span", { class: `swatch c-${group.color}` }),
+      el("span", { class: "name", text: group.name }),
+      el("span", { class: "meta", text: `${group.items.length} ${group.items.length === 1 ? "show" : "shows"} · ${total} h/wk` }),
+      el("button", { text: open ? "–" : "+", "aria-label": `${open ? "Close" : "Open"} ${group.name}`, "aria-expanded": String(open), style: "padding:0 7px",
+        onpointerdown(e) { e.stopPropagation(); }, onclick() { open ? expanded.delete(group.id) : expanded.add(group.id); renderGroups(); } }));
+    draggable(row, () => ({ type: "group", group: group.id, label: group.name }));
+    const card = el("div", { class: "card", "data-group": group.id }, row);
+    if (open) card.append(groupDetail(group, count));
+    return card;
+  }));
+}
+function groupDetail(group, count) {
+  const nameInput = el("input", { value: group.name, maxlength: "60", "aria-label": "Group name",
+    onchange(e) { const v = e.target.value.trim(); if (v && v !== group.name) { remember(); group.name = v; render(); } else e.target.value = group.name; } });
+  const chips = group.items.length ? el("div", { class: "chips" }, ...group.items.map(id => {
+    const info = items[id];
+    return el("span", { class: info ? "chip" : "chip missing", "data-tip": info ? info.name : `${id} isn't in the library` }, el("span", { text: info ? info.name : id }),
+      el("button", { text: "×", "aria-label": `Remove ${info ? info.name : id}`, onclick() { remember(); group.items = group.items.filter(i => i !== id); render(); } }));
+  })) : el("div", { class: "meta", text: "Drag shows from the library onto this group." });
+  const inOrder = group.mode === "in_order", runsOver = group.overflow !== false;
+  return el("div", { class: "detail" }, nameInput, chips,
+    el("div", { class: "inline" },
+      el("button", { text: inOrder ? "Takes turns, next episode" : "Shuffle: longest wait first", "data-tip": "How this group picks what airs",
+        onclick() { remember(); group.mode = inOrder ? "shuffle" : "in_order"; render(); } }),
+      el("button", { id: `overflow-${group.id}`, text: runsOver ? "Runs past its slot" : "Cut off at slot end",
+        "data-tip": runsOver ? "Too long for its slot\nIt loses its commercials, then runs past the end, and the next slot starts late."
+                             : "Too long for its slot\nIt loses its commercials, then gets cut off when the slot ends, so the next slot starts on time.",
+        onclick() { remember(); group.overflow = !runsOver; render(); } }),
+      el("button", { text: "Delete", onclick() {
+        remember();
+        doc.slots = doc.slots.filter(s => s.group !== group.id);
+        doc.groups = doc.groups.filter(g => g !== group);
+        if (selected && selected.group === group.id) selected = null;
+        render();
+      } })),
+    el("div", { class: "colors" }, ...COLORS.map(c => el("button", { class: `c-${c}`, "aria-label": `Color ${c}`, "aria-pressed": String(group.color === c),
+      onclick() { remember(); group.color = c; render(); } }))),
+    el("div", { class: "meta", text: `On the grid ${count} ${count === 1 ? "time" : "times"} a week` }));
+}
+function renderWeek() {
+  const scrollTop = $("scroller").scrollTop;
+  const week = $("week");
+  week.replaceChildren(el("div", { class: "head corner" }), ...DAYS.map(d => el("div", { class: "head", text: d })));
+  const times = el("div", { class: "times" });
+  for (let i = 0; i < ROWS; i++) times.append(el("div", { class: "time", text: i % 2 ? "" : clock(FIRST + i / 2) }));
+  week.append(times);
+  DAYS.forEach((_, day) => {
+    const col = el("div", { class: "col", "data-day": day });
+    for (const b of doc.blocks.filter(x => x.days.includes(day))) col.append(blockNode(b));
+    for (const s of doc.slots.filter(x => x.day === day)) col.append(slotNode(s));
+    week.append(col);
+  });
+  $("scroller").scrollTop = scrollTop;
+}
+function blockNode(b) {
+  const stripTip = `${blockText(b)}\nClick to edit. Drop a group here to fill it.`;
+  const strip = el("div", { class: "strip", text: b.name, "data-tip": stripTip, "aria-label": stripTip, tabindex: "0", role: "button",
+    onclick() { selectBlock(b); }, onkeydown(e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectBlock(b); } } });
+  return el("div", { class: `block${selectedBlock === b ? " selected" : ""}`, "data-block": b.id,
+    style: `top:calc(var(--row)*${(b.start - FIRST) * 2});height:calc(var(--row)*${(b.end - b.start) * 2})` }, strip);
+}
+function selectBlock(b) {
+  selectedBlock = b;
+  selected = null;
+  $("blockline").value = blockText(b);
+  showParsed();
+  render();
+}
+function slotNode(s) {
+  const group = groupOf(s.group);
+  const warnings = slotWarnings(s, group);
+  const tipText = `${group.name}, ${clock(s.start)} to ${clock(s.end)}${warnings.length ? "\n" + warnings.join("\n") : ""}`;
+  const node = el("div", {
+    class: `slot c-${group.color}${hours(s) <= 0.5 ? " short" : ""}${selected === s ? " selected" : ""}`, style: `top:calc(var(--row)*${(s.start - FIRST) * 2} + 1px);height:calc(var(--row)*${hours(s) * 2} - 2px)`,
+    "data-tip": tipText, "aria-label": tipText, tabindex: "0",
+    onkeydown(e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selected = s; render(); } },
+  }, el("span", { text: group.name }));
+  if (warnings.length) node.append(el("span", { class: "warnmark", text: "!", "aria-label": warnings.join(". ") }));
+  const handle = el("div", { class: "resize", "data-tip": "Drag to change the length" });
+  node.append(handle);
+  draggable(handle, () => ({ type: "resize", slot: s, label: group.name }), true);
+  draggable(node, e => ({ type: "slot", slot: s, label: group.name, copy: e.altKey || e.ctrlKey }), true, () => { selected = s; selectedBlock = null; render(); });
+  return node;
+}
+function renderSelection() {
+  const bar = $("selbar");
+  if (selectedBlock && doc.blocks.includes(selectedBlock)) {
+    const b = selectedBlock;
+    bar.replaceChildren(el("span", { class: "what", text: blockText(b) }),
+      el("span", { text: "Retype it above and press Enter, or drop a group on its strip to fill it." }),
+      el("button", { text: "Remove block", onclick() {
+        remember();
+        doc.blocks = doc.blocks.filter(x => x !== b);
+        selectedBlock = null;
+        $("blockline").value = "";
+        showParsed();
+        render();
+      } }),
+      el("button", { text: "Done", onclick() { selectedBlock = null; $("blockline").value = ""; showParsed(); render(); } }));
+    return;
+  }
+  selectedBlock = null;
+  if (!selected || !doc.slots.includes(selected)) {
+    selected = null;
+    bar.replaceChildren(el("span", { text: "Drag a group onto the grid. Click a slot to repeat it on other days. Hold Alt or Ctrl while dragging a slot to copy it." }),
+      el("button", { text: "Clear the week", disabled: "", onclick() {} }));
+    bar.lastChild.disabled = !doc.slots.length;
+    bar.lastChild.onclick = () => { remember(); doc.slots = []; render(); };
+    return;
+  }
+  const s = selected, group = groupOf(s.group);
+  const same = day => doc.slots.find(x => x.day === day && x.start === s.start && x.end === s.end && x.group === s.group);
+  const setDays = list => {
+    remember();
+    for (const d of list) if (!same(d)) place(d, s.start, s.end, s.group);
+    render();
+  };
+  const warnings = slotWarnings(s, group);
+  bar.replaceChildren(
+    el("span", { class: "what", text: `${group.name}, ${DAYS[s.day]} ${clock(s.start)} to ${clock(s.end)}` }),
+    el("span", { text: "Air on:" }),
+    el("div", { class: "days" }, ...DAYS.map((d, i) => el("button", { text: d, "aria-pressed": String(Boolean(same(i))), onclick() {
+      const there = same(i);
+      if (there && there === s) return;
+      if (there) { remember(); doc.slots = doc.slots.filter(x => x !== there); render(); } else setDays([i]);
+    } }))),
+    el("button", { text: "Mon–Fri", onclick() { setDays([0, 1, 2, 3, 4]); } }),
+    el("button", { text: "Every day", onclick() { setDays([0, 1, 2, 3, 4, 5, 6]); } }),
+    el("button", { text: "Remove", onclick: removeSelected }),
+    warnings.length ? el("span", { class: "warnline", text: warnings[0] }) : null);
+}
+function removeSelected() {
+  if (!selected) return;
+  remember();
+  doc.slots = doc.slots.filter(s => s !== selected);
+  selected = null;
+  render();
+}
+
+/* --- Tooltips: larger than the browser's own. Mouse and keyboard; a touch has no hover. --- */
+const TIP_DELAY_MS = 300, TIP_GAP = 10;
+const tipBox = el("div", { class: "tip", role: "tooltip", hidden: "" });
+document.body.append(tipBox);
+let tipFor = null, tipTimer = 0;
+
+function hideTip() {
+  clearTimeout(tipTimer);
+  tipFor = null;
+  tipBox.hidden = true;
+}
+function showTip(node) {
+  const [head, ...rest] = node.dataset.tip.split("\n");
+  tipBox.replaceChildren(el("b", { text: head }), rest.join("\n"));
+  tipBox.hidden = false;
+  const r = node.getBoundingClientRect(), w = tipBox.offsetWidth, h = tipBox.offsetHeight;
+  // Beside it, on whichever side has room; on the screen whatever happens
+  const right = r.right + TIP_GAP + w <= innerWidth;
+  const x = right ? r.right + TIP_GAP : Math.max(TIP_GAP, r.left - TIP_GAP - w);
+  const y = Math.max(TIP_GAP, Math.min(r.top, innerHeight - h - TIP_GAP));
+  tipBox.style.left = `${x}px`;
+  tipBox.style.top = `${y}px`;
+}
+addEventListener("pointerover", e => {
+  if (e.pointerType === "touch" || drag) return;
+  const node = e.target.closest("[data-tip]");
+  if (node === tipFor) return;
+  hideTip();
+  if (!node) return;
+  tipFor = node;
+  tipTimer = setTimeout(() => showTip(node), TIP_DELAY_MS);
+});
+document.documentElement.addEventListener("pointerleave", hideTip);
+addEventListener("pointerdown", hideTip, true);
+addEventListener("scroll", hideTip, true);
+addEventListener("focusin", e => {
+  if (e.target.matches("[data-tip]:focus-visible")) { hideTip(); tipFor = e.target; showTip(e.target); }
+});
+addEventListener("focusout", hideTip);
+
+/* --- Dragging: pointer events, so it works with a mouse and on a phone --- */
+function draggable(node, describe, anywhere, onClick) {
+  node.addEventListener("pointerdown", e => {
+    if (e.button) return;
+    // On touch a list row drags only from its grip, so the list can still be scrolled
+    if (e.pointerType === "touch" && !anywhere && !e.target.classList.contains("grip")) return;
+    e.stopPropagation();
+    drag = { ...describe(e), x: e.clientX, y: e.clientY, moved: false, onClick, ghost: null, preview: null };
+    addEventListener("pointermove", onMove);
+    addEventListener("pointerup", onUp);
+    addEventListener("pointercancel", cancelDrag);
+  });
+}
+function onMove(e) {
+  if (!drag) return;
+  if (!drag.moved) {
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 5) return;
+    drag.moved = true;
+    document.body.classList.add("dragging");
+    if (drag.type !== "resize") {
+      drag.ghost = el("div", { class: "ghost", text: drag.label });
+      document.body.append(drag.ghost);
+    }
+  }
+  e.preventDefault();
+  if (drag.ghost) drag.ghost.style.transform = `translate(${e.clientX + 10}px, ${e.clientY + 8}px)`;
+  showTarget(e.clientX, e.clientY);
+  autoScroll(e.clientX, e.clientY);
+}
+function autoScroll(x, y) {
+  for (const box of [$("scroller"), $("groups"), $("library")]) {
+    const r = box.getBoundingClientRect();
+    if (x < r.left || x > r.right || y < r.top - 20 || y > r.bottom + 20) continue;
+    if (y < r.top + 40) box.scrollTop -= 12;
+    else if (y > r.bottom - 30) box.scrollTop += 12;
+  }
+}
+function target(x, y) {
+  const hit = document.elementFromPoint(x, y);
+  if (!hit) return null;
+  const strip = hit.closest(".strip");
+  if (strip && (drag.type === "group" || drag.type === "item")) {
+    const id = strip.parentNode.dataset.block;
+    return { kind: "block", block: doc.blocks.find(b => b.id === id), node: strip.parentNode };
+  }
+  const col = hit.closest(".col") || (hit.closest(".slot") || { closest() {} }).closest(".col");
+  if (col) {
+    const r = col.getBoundingClientRect();
+    const row = Math.max(0, Math.min(ROWS - 1, Math.floor((y - r.top) / rowHeight())));
+    return { kind: "grid", day: Number(col.dataset.day), h: FIRST + row / 2, col };
+  }
+  const card = hit.closest("[data-group]");
+  if (card) return { kind: "card", group: card.dataset.group, node: card };
+  if (hit.closest("#newgroup")) return { kind: "new", node: $("newgroup") };
+  return null;
+}
+function rowHeight() { return parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row")); }
+function clearMarks() {
+  document.querySelectorAll(".over").forEach(n => n.classList.remove("over"));
+  if (drag && drag.preview) { drag.preview.remove(); drag.preview = null; }
+}
+function preview(col, start, end) {
+  const node = el("div", { class: "preview", style: `top:calc(var(--row)*${(start - FIRST) * 2});height:calc(var(--row)*${(end - start) * 2})` });
+  col.append(node);
+  drag.preview = node;
+}
+function spanFor(t) {
+  if (drag.type === "slot") {
+    const len = hours(drag.slot);
+    const start = Math.max(FIRST, Math.min(LAST - len, t.h));
+    return [start, start + len];
+  }
+  if (drag.type === "resize") {
+    const end = Math.max(drag.slot.start + 0.5, Math.min(LAST, t.h + 0.5));
+    return [drag.slot.start, end];
+  }
+  const there = occupant(t.day, t.h);
+  if (there) return [there.start, there.end];
+  const group = drag.type === "group" ? groupOf(drag.group) : { items: [drag.item] };
+  return [t.h, t.h + Math.min(naturalLength(group), gapAfter(t.day, t.h))];
+}
+function showTarget(x, y) {
+  clearMarks();
+  let t = target(x, y);
+  if (!t) return;
+  if (drag.type === "resize") {
+    if (t.kind !== "grid") return;
+    t = { ...t, day: drag.slot.day, col: document.querySelector(`.col[data-day="${drag.slot.day}"]`) };
+  }
+  if (t.kind === "grid") {
+    const [start, end] = spanFor(t);
+    preview(t.col, start, end);
+  } else if (t.kind === "block") {
+    document.querySelectorAll(`[data-block="${t.block.id}"]`).forEach(n => n.classList.add("over"));
+  } else if (drag.type === "item") {
+    t.node.classList.add("over");
+  }
+}
+function onUp(e) {
+  const d = drag;
+  if (!d) return;
+  stopDrag();
+  if (!d.moved) { if (d.onClick) d.onClick(); return; }
+  drag = d;
+  const t = target(e.clientX, e.clientY);
+  if (t) {
+    if (d.type === "item") dropItem(d, t);
+    else if (d.type === "group" && t.kind === "grid") dropGroup(groupOf(d.group), t.day, t.h);
+    else if (d.type === "group" && t.kind === "block") fillBlock(t.block, groupOf(d.group));
+    else if (d.type === "slot" && t.kind === "grid") moveSlot(d, t);
+    else if (d.type === "resize" && t.kind === "grid") resizeSlot(d, t);
+  }
+  clearMarks();
+  if (d.ghost) d.ghost.remove();
+  drag = null;
+}
+function dropItem(d, t) {
+  if (t.kind === "card") addToGroup(groupOf(t.group), d.item);
+  else if (t.kind === "block") {
+    let group = doc.groups.find(g => g.items.length === 1 && g.items[0] === d.item);
+    if (!group) { remember(); group = newGroup(d.item); }
+    fillBlock(t.block, group);
+  }
+  else if (t.kind === "new") { remember(); expanded.add(newGroup(d.item).id); render(); }
+  else if (t.kind === "grid") {
+    // A show dropped straight on the grid: reuse its one-show group, or make one
+    let group = doc.groups.find(g => g.items.length === 1 && g.items[0] === d.item);
+    if (!group) { remember(); group = newGroup(d.item); }
+    dropGroup(group, t.day, t.h);
+  }
+}
+function moveSlot(d, t) {
+  const [start, end] = spanFor(t);
+  remember();
+  if (d.copy) selected = place(t.day, start, end, d.slot.group);
+  else {
+    place(t.day, start, end, d.slot.group, d.slot);
+    selected = d.slot;
+  }
+  render();
+}
+function resizeSlot(d, t) {
+  const [start, end] = spanFor({ ...t, day: d.slot.day });
+  if (end === d.slot.end) return;
+  remember();
+  place(d.slot.day, start, end, d.slot.group, d.slot);
+  selected = d.slot;
+  render();
+}
+function stopDrag() {
+  removeEventListener("pointermove", onMove);
+  removeEventListener("pointerup", onUp);
+  removeEventListener("pointercancel", cancelDrag);
+  document.body.classList.remove("dragging");
+}
+function cancelDrag() {
+  stopDrag();
+  clearMarks();
+  if (drag && drag.ghost) drag.ghost.remove();
+  drag = null;
+}
+
+/* --- Talking to the station --- */
+function setStatus(text, error) {
+  $("status").textContent = text;
+  $("status").classList.toggle("err", Boolean(error));
+}
+async function save() {
+  $("save").disabled = true;
+  setStatus("Saving…");
+  try {
+    const r = await fetch("/api/schedule", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ version, groups: doc.groups, slots: doc.slots, blocks: doc.blocks }) });
+    const body = await r.json();
+    if (r.status === 409) throw new Error("Changed in another window. Reload to get it; your edits here aren't saved.");
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    version = body.version;
+    dirty = false;
+    setStatus("Saved");
+  } catch (e) {
+    setStatus(e.message, true);
+    $("save").disabled = false;
+    return;
+  }
+  render();
+}
+async function loadLibrary() {
+  const r = await fetch("/api/library");
+  const body = await r.json();
+  items = Object.fromEntries(body.items.map(i => [i.id, i]));
+  rules = body.rules;
+  $("rescan").disabled = body.rescanning;
+  $("rescan").textContent = body.rescanning ? "Rescanning…" : "Rescan NAS";
+  $("notice").textContent = body.live ? "" : "Build the week here and save it. The TV keeps its current lineup until the station is switched over to this schedule.";
+  $("notice").hidden = body.live;
+  return body;
+}
+async function rescan() {
+  $("rescan").disabled = true;
+  $("rescan").textContent = "Rescanning…";
+  await fetch("/api/rescan", { method: "POST" });
+  const poll = setInterval(async () => {
+    const body = await loadLibrary();
+    if (!body.rescanning) { clearInterval(poll); render(); }
+  }, LONG_MS);
+}
+async function start() {
+  try {
+    const r = await fetch("/api/schedule");
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    doc = await r.json();
+    doc.blocks = doc.blocks || [];
+    version = doc.version;
+    await loadLibrary();
+  } catch (e) {
+    setStatus(`Can't reach the station: ${e.message}`, true);
+    return;
+  }
+  render();
+}
+$("blockline").oninput = showParsed;
+$("blockline").onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); addBlock(); } };
+$("addblock").onclick = addBlock;
+$("undo").onclick = undo;
+$("save").onclick = save;
+$("rescan").onclick = rescan;
+$("search").oninput = () => { renderLibrary(); renderGroups(); };
+$("addgroup").onclick = () => { remember(); expanded.add(newGroup(null).id); render(); };
+addEventListener("keydown", e => {
+  if (e.target.matches("input")) return;
+  if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); undo(); }
+  else if ((e.key === "Delete" || e.key === "Backspace") && selected) { e.preventDefault(); removeSelected(); }
+  else if (e.key === "Escape") {
+    if (!tipBox.hidden) { hideTip(); return; }
+    if (drag) cancelDrag();
+    selected = selectedBlock = null;
+    render();
+  }
+});
+addEventListener("beforeunload", e => { if (dirty) e.preventDefault(); });
+start();
+</script>
+</body>
+</html>

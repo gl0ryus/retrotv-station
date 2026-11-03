@@ -21,6 +21,7 @@ import random
 import re
 import urllib.request
 
+import retrotv_health as health
 from retrotv_cards import BARLOW_S, CHANNEL, WHITE, Card, Script, esc, lavfi_url, music
 from retrotv_screens import DATA_DIR, USER_AGENT, wrap
 
@@ -130,6 +131,7 @@ def _news(level, seen):
 
 
 SOURCES = {"fact": _fact, "dad": _dad_joke, "joke": _late_joke, "news": _news}
+BLURB_SERVICES = {"fact": "facts", "dad": "dad", "joke": "jokes"}   # a reply that came but made no sense
 
 
 def _sections(path):
@@ -219,6 +221,8 @@ def _pick(level, seen, show=None):
             key, beats = SOURCES[source](level, seen)
         except Exception as e:
             logger.warning(f"Blurb: no {source} right now ({e})")
+            if source in BLURB_SERVICES:
+                health.record(BLURB_SERVICES[source], False, e)
             options = [o for o in options if o[1] != source] or options
             continue
         text = " ".join(beats)

@@ -1,4 +1,7 @@
-# For retrotv_news.py, in its own venv on the Pi (~/retrotv_venv); the station itself needs none of this.
+# For retrotv_news.py, in its own venv on the Pi (~/retrotv_venv); the station itself needs none of this,
+# except yt-dlp, which it runs for live launches (with node, from apt, as its JavaScript runtime).
+yt-dlp==2026.10.21
+yt-dlp-ejs==0.8.0
 # Every pin was released at least 7 days before it was added (checked 2026-10-29).
 annotated-types==0.8.0
 anthropic==1.17.0

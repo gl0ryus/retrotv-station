@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>G|TV Health</title>
+<style>
+@font-face { font-family: "Archivo Black"; src: url(/fonts/ArchivoBlack-Regular.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 600; src: url(/fonts/BarlowCondensed-SemiBold.ttf); }
+@font-face { font-family: "Barlow Condensed"; font-weight: 700; src: url(/fonts/BarlowCondensed-Bold.ttf); }
+:root {
+  --bg: #16110d; --panel: #2b2017; --line: #3d2c1e; --edge: #7a5232; --cream: #efe6d2; --sky: #c4ad88;
+  --ok: #6fd27c; --warn: #f2b33d; --down: #ff6b4a; --idle: #9c8a70;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--cream); font: 600 19px/1.3 "Barlow Condensed", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 16px 16px 48px; }
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.logo { font-family: "Archivo Black"; font-size: 30px; transform: skewX(-9deg); line-height: 1; }
+nav a { color: var(--sky); margin-left: 14px; }
+nav a:first-child { margin-left: 0; }
+#headline { margin: 16px 0 2px; font-family: "Archivo Black"; font-size: 25px; line-height: 1.15; }
+#updated { color: var(--sky); font-size: 16px; }
+#updated.lost { color: var(--down); }
+h2 { margin: 26px 0 6px; font-size: 16px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--sky); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+details, .row { border-top: 1px solid var(--line); }
+.card > :first-child { border-top: 0; }
+summary { list-style: none; cursor: pointer; }
+summary::-webkit-details-marker { display: none; }
+.line { display: grid; grid-template-columns: 76px 1fr; gap: 10px; padding: 10px 12px; align-items: baseline; }
+.state { font-size: 16px; font-weight: 700; }
+.ok { color: var(--ok); } .warn { color: var(--warn); } .down { color: var(--down); } .idle { color: var(--idle); }
+.name { overflow-wrap: anywhere; }
+.sub { color: var(--sky); font-size: 16px; overflow-wrap: anywhere; }
+.sub.err { color: var(--warn); }
+.more { padding: 0 12px 12px 98px; font-size: 17px; }
+.more p { margin: 4px 0; overflow-wrap: anywhere; }
+.more b { color: var(--sky); font-weight: 600; }
+button { font: 700 17px "Barlow Condensed", sans-serif; color: var(--bg); background: var(--cream); border: 0; border-radius: 6px;
+         padding: 8px 14px; margin-top: 8px; min-height: 40px; cursor: pointer; }
+.empty { padding: 12px; color: var(--sky); }
+@media (max-width: 480px) { .more { padding-left: 12px; } .line { grid-template-columns: 64px 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo">G|TV</div>
+    <nav><a href="/">Guide</a><a href="/schedule">Scheduler</a></nav>
+  </header>
+  <div id="headline">Checking&hellip;</div>
+  <div id="updated"></div>
+  <div id="sections"></div>
+</main>
+<script>
+const WORDS = { ok: "OK", warn: "Trouble", down: "Down", idle: "Not used" };
+const FILE_STATES = {
+  moved: "Moved to _for_review. It won't air until you allow it.",
+  missing: "The file was already gone, so there was nothing to move. The station copies it again if it needs it.",
+  held: "Not moved: too many failed at once, or the move itself failed, so the drive may be at fault.",
+  left: "Not in the cache, so it wasn't moved.",
+};
+const sections = document.getElementById("sections");
+const opened = new Set();
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function ago(when, now) {
+  if (!when) return "never";
+  const minutes = Math.round((now - when) / 60);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return minutes + " min ago";
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return hours + (hours === 1 ? " hour ago" : " hours ago");
+  return Math.round(hours / 24) + " days ago";
+}
+
+function line(status, name, sub, subClass) {
+  const row = el("div", "line");
+  row.append(el("span", "state " + status, WORDS[status]));
+  const text = el("div");
+  text.append(el("div", "name", name));
+  if (sub) text.append(el("div", "sub" + (subClass ? " " + subClass : ""), sub));
+  row.append(text);
+  return row;
+}
+
+function fact(label, value) {
+  const p = el("p");
+  p.append(el("b", "", label + ": "), document.createTextNode(value));
+  return p;
+}
+
+function serviceRow(s, now) {
+  const details = el("details");
+  details.open = opened.has(s.id);
+  details.addEventListener("toggle", () => details.open ? opened.add(s.id) : opened.delete(s.id));
+  const summary = el("summary");
+  let sub = s.provider, subClass = "";
+  if (s.status === "warn" || s.status === "down") { sub = s.message; subClass = "err"; }
+  else if (s.fails_today) { sub = s.provider + " · failed " + s.fails_today + (s.fails_today === 1 ? " time" : " times") + " today, working now"; subClass = "err"; }
+  summary.append(line(s.status, s.name, sub, subClass));
+  const more = el("div", "more");
+  more.append(fact("From", s.provider), fact("Used for", s.used_for), fact("If it fails", s.when_down),
+              fact("Last worked", ago(s.ok_at, now)));
+  if (s.fail_at) more.append(fact("Last failed", ago(s.fail_at, now) + (s.error ? " · " + s.error : "")));
+  more.append(fact("Failures today", String(s.fails_today)));
+  details.append(summary, more);
+  return details;
+}
+
+function fileRow(f, now) {
+  const row = el("div", "row");
+  const status = f.status === "moved" || f.status === "held" ? "warn" : "idle";
+  const line_ = line(status, f.label, ago(f.when, now) + " · the player said: " + f.error + (f.count > 1 ? " · " + f.count + " times" : ""));
+  line_.firstChild.textContent = f.status === "moved" ? "Set aside" : f.status === "held" ? "Failed" : "Noted";
+  const more = el("div", "more");
+  more.append(el("p", "", FILE_STATES[f.status] || ""));
+  if (f.moved_to) more.append(fact("On the Pi", f.moved_to));
+  if (f.original) more.append(fact("Original", f.original));
+  if (f.probe) more.append(fact("Second opinion", f.probe));
+  const button = el("button", "", f.status === "moved" ? "Allow it to air again" : "Dismiss");
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    await fetch("/api/bad_file/clear", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: f.id }) });
+    load();
+  });
+  more.append(button);
+  row.append(line_, more);
+  return row;
+}
+
+function section(title, rows, emptyText) {
+  const parts = [el("h2", "", title)];
+  const card = el("div", "card");
+  if (rows.length) card.append(...rows); else card.append(el("div", "empty", emptyText));
+  parts.push(card);
+  return parts;
+}
+
+function render(data) {
+  const now = data.time;
+  const everything = data.box.concat(data.services);
+  const down = everything.filter(s => s.status === "down");
+  const trouble = everything.filter(s => s.status === "warn");
+  const setAside = data.bad_files.filter(f => f.status === "moved").length;
+  const parts = [];
+  if (down.length) parts.push(down.length + (down.length === 1 ? " thing is down" : " things are down"));
+  if (trouble.length) parts.push(trouble.length + " having trouble");
+  if (setAside) parts.push(setAside + (setAside === 1 ? " file to review" : " files to review"));
+  const headline = document.getElementById("headline");
+  headline.textContent = parts.join(", ") || "No problems found";
+  headline.className = down.length ? "down" : parts.length ? "warn" : "ok";
+  const updated = document.getElementById("updated");
+  updated.className = "";
+  updated.textContent = "Updated " + new Date(now * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  const nodes = [];
+  const problems = data.services.filter(s => s.status === "down" || s.status === "warn");
+  if (problems.length) nodes.push(...section("Needs a look", problems.map(s => serviceRow(s, now))));
+  nodes.push(...section("The Pi", data.box.map(b => line(b.status, b.name, b.message))));
+  if (data.bad_files.length) nodes.push(...section("Bad video files", data.bad_files.map(f => fileRow(f, now))));
+  else nodes.push(...section("Bad video files", [], "None so far."));
+  const groups = new Map();
+  for (const s of data.services) {
+    if (s.status === "down" || s.status === "warn") continue;
+    if (!groups.has(s.group)) groups.set(s.group, []);
+    groups.get(s.group).push(serviceRow(s, now));
+  }
+  for (const [group, rows] of groups) nodes.push(...section(group, rows));
+  sections.replaceChildren(...nodes);
+}
+
+async function load() {
+  try {
+    const reply = await fetch("/api/health");
+    if (!reply.ok) throw new Error(reply.status);
+    render(await reply.json());
+  } catch (e) {
+    const updated = document.getElementById("updated");
+    updated.className = "lost";
+    updated.textContent = "Can't reach the station. What's below may be out of date.";
+  }
+}
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
