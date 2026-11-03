@@ -27,11 +27,12 @@ ART_HOSTS = ("tvmaze.com", "upload.wikimedia.org")
 RETRY_DAYS = 14             # a title with no art is looked for again after this long
 REQUEST_GAP_SECONDS = 1.0   # kinder than either service asks for
 MAX_BYTES = 12 * 1024 * 1024
-THUMB_W, THUMB_H = 114, 64  # 16:9, a third of the 342x200 picture across and down, before a one-pixel border
+THUMB_W, THUMB_H = 114, 64  # 16:9, a third of the 342x200 picture across and down, before the border
+BORDER = 2                  # even: in a subsampled format pad rounds an odd offset down, which put a 1 px frame all on two sides
 # Wide art fills it; a tall poster sits whole in the middle, over a blurred copy of itself
 THUMB_FILTER = (f"split=2[a][b];[a]scale={THUMB_W}:{THUMB_H}:force_original_aspect_ratio=increase:flags=lanczos,crop={THUMB_W}:{THUMB_H},"
                 f"gblur=sigma=5,eq=brightness=-0.12[back];[b]scale={THUMB_W}:{THUMB_H}:force_original_aspect_ratio=decrease:flags=lanczos[front];"
-                f"[back][front]overlay=(W-w)/2:(H-h)/2,pad={THUMB_W + 2}:{THUMB_H + 2}:1:1:color=0xEFE6D2,format=rgba")
+                f"[back][front]overlay=(W-w)/2:(H-h)/2,pad={THUMB_W + 2 * BORDER}:{THUMB_H + 2 * BORDER}:{BORDER}:{BORDER}:color=0xEFE6D2,format=rgba")
 # Bigger than the 512x300 card in the direction it scrolls: wide pictures pan across, tall ones down
 WIDE_FILTER = "scale='if(gt(iw/ih,1.2),-2,512)':'if(gt(iw/ih,1.2),400,-2)':flags=lanczos"
 MOVIE_CATEGORIES = ("movies",)
@@ -43,7 +44,7 @@ CLIP_MIN_VIDEO_SECONDS = 120
 CLIP_CUT_TIMEOUT = 180
 CLIP_KEEP_DAYS = 14
 CLIP_FILTER = (f"fps={CLIP_FPS},scale={THUMB_W}:{THUMB_H}:force_original_aspect_ratio=increase:flags=bilinear,crop={THUMB_W}:{THUMB_H},"
-               f"blackdetect=d=1:pix_th=0.12,pad={THUMB_W + 2}:{THUMB_H + 2}:1:1:color=0xEFE6D2,format=yuv420p")
+               f"blackdetect=d=1:pix_th=0.12,pad={THUMB_W + 2 * BORDER}:{THUMB_H + 2 * BORDER}:{BORDER}:{BORDER}:color=0xEFE6D2,format=yuv420p")
 # What TVmaze calls a show, where it isn't what the files do
 ALIASES = {"daily show": "The Daily Show with Jon Stewart", "comedy central roast": "Comedy Central Roasts"}
 NO_ART = ("big-thinkers",)  # a different show has the same name, and nothing in the files says which year this one is
