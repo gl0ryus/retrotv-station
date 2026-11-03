@@ -14,8 +14,8 @@ import time
 import urllib.parse
 import urllib.request
 
-from retrotv_io import USER_AGENT, get_json, write_json
-from retrotv_screens import DATA_DIR
+from retrotv.jsonio import USER_AGENT, get_json, write_json
+from retrotv.screens import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 

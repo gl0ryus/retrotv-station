@@ -27,16 +27,12 @@ WORK = tempfile.mkdtemp(prefix="snapshots")
 
 
 def modules():
-    """The station's modules, by short name, wherever they live."""
+    """The station's modules, by short name: overlay_filter is in retrotv.overlays once the station module is split."""
+    from retrotv import alerts, cards, events, screens, scores
     try:
-        from retrotv import (alerts, cards, events, screens, scores)  # type: ignore[attr-defined]
-        from retrotv import overlays  # type: ignore[attr-defined]
-        overlay_filter = overlays.overlay_filter
+        from retrotv.overlays import overlay_filter  # type: ignore[import-not-found]
     except ImportError:
-        import retro_station
-        import retrotv_alerts as alerts, retrotv_cards as cards, retrotv_events as events  # noqa: E401
-        import retrotv_screens as screens, retrotv_scores as scores  # noqa: E401
-        overlay_filter = retro_station.overlay_filter
+        from retrotv.station import overlay_filter
     return alerts, cards, events, screens, scores, overlay_filter
 
 

@@ -2,7 +2,10 @@
 # Uses a temporary art folder; with a video file it also looks up real art for the marathon shows and renders frames.
 import datetime, io, json, os, shutil, subprocess, sys, tempfile, time, types, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-import retro_station as rs, retrotv_art as art, retrotv_cards as cards, retrotv_events as events
+from retrotv import station as rs
+from retrotv import art
+from retrotv import cards
+from retrotv import events
 
 TMP = tempfile.mkdtemp(prefix="art_test")
 cards.CARDS_DIR = TMP + "/cards"

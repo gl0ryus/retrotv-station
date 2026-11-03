@@ -11,17 +11,18 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
 
-import retrotv_schedule as schedule
-from retrotv_cards import FONTS_DIR
+from retrotv import schedule
+from retrotv.cards import FONTS_DIR
 
-if TYPE_CHECKING:   # only for the type checker: retro_station imports this module
-    from retro_station import Station
+if TYPE_CHECKING:   # only for the type checker: retrotv.station imports this module
+    from retrotv.station import Station
 
 logger = logging.getLogger("RetroTV")
 
-PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrotv_remote.html")
-SCHEDULE_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrotv_schedule.html")
-HEALTH_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "retrotv_health.html")
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+PAGE_FILE = os.path.join(WEB_DIR, "remote.html")
+SCHEDULE_PAGE_FILE = os.path.join(WEB_DIR, "schedule.html")
+HEALTH_PAGE_FILE = os.path.join(WEB_DIR, "health.html")
 MAX_BODY = 65536
 MAX_SCHEDULE_BODY = 1024 * 1024
 FONT_FILES = ("ArchivoBlack-Regular.ttf", "BarlowCondensed-Bold.ttf", "BarlowCondensed-ExtraBold.ttf",

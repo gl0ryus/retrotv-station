@@ -14,21 +14,21 @@ import subprocess
 import datetime
 import logging
 
-import retrotv_cards as cards
-import retrotv_screens as screens
-import retrotv_events as events
-import retrotv_meta as meta
-import retrotv_remote as remote
-import retrotv_schedule as schedule
-import retrotv_launches as launches
-import retrotv_health as health
-import retrotv_weather as wx
-import retrotv_art as posters
-from retrotv_io import write_json
-import retrotv_alerts as alerts
-import retrotv_blurbs as blurbs
-import retrotv_archive as archive
-import retrotv_scores as scores
+from retrotv import cards
+from retrotv import screens
+from retrotv import events
+from retrotv import meta
+from retrotv import remote
+from retrotv import schedule
+from retrotv import launches
+from retrotv import health
+from retrotv import weather as wx
+from retrotv import art as posters
+from retrotv.jsonio import write_json
+from retrotv import alerts
+from retrotv import blurbs
+from retrotv import archive
+from retrotv import scores
 
 # --- Configuration ---
 NAS_ROOT = "/mnt/tower/.retrotv"
@@ -82,7 +82,7 @@ REFILL_RETRY_MINUTES = 60  # minimum gap between early refills, e.g. while the N
 INDEX_MAX_AGE_DAYS = 7     # re-walk the NAS during a refill once the index is this old
 GB = 1024 ** 3
 
-# Public domain video from archive.org (retrotv_archive.py): 50s and 60s TV, old movies, cartoons, short films and
+# Public domain video from archive.org (retrotv/archive.py): 50s and 60s TV, old movies, cartoons, short films and
 # commercials, picked automatically and never kept on the NAS. A few of each kind are downloaded just ahead
 # (ARCHIVE_READY), air from the SD card like everything else, and are deleted once they've aired. Between them
 # they get about ARCHIVE_SHARE of the picks in their category (shows, movies, kids' shows, commercials)
@@ -172,7 +172,7 @@ SPECIALS = {
     "space": 180,    # Who's in Space, with the ISS on a world map
     "markets": 90,   # BTC, ETH and the S&P 500 with their 24-hour change (CoinGecko, Yahoo Finance)
     "reminder": 120, # a heads-up before Valentine's, Mother's and Father's Day (see REMINDERS)
-    "blurb": 30,     # text bumps: facts, food for thought, dad jokes, raunchier late at night (retrotv_blurbs)
+    "blurb": 30,     # text bumps: facts, food for thought, dad jokes, raunchier late at night (retrotv.blurbs)
     "sky": 120,      # Tonight's Sky: the moon, planets and ISS passes over the house, sunset to sign-off
     "teletext": 150, # G|TV Text: teletext pages of tonight's listings, the weather, markets and odd news
     "art": 240,      # Art Break: the day's picture, drawn by Claude, building up shape by shape
@@ -186,12 +186,12 @@ SPECIAL_GAP_MINUTES = 10
 FRESH_SPECIALS = ("weather",)   # made again with the latest data just before they're queued
 # Where the weather and the emergency alerts are for, kept out of the repo in this file next to the script:
 # {"place": "Town, ST", "lat": 28.0, "lon": -82.5}. Without it there's no weather card and no alerts
-LOCATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "location.json")
+LOCATION_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "location.json")   # next to the launcher, outside the package
 WEATHER_TZ = "America/New_York"
-# Emergency alerts from the National Weather Service for WEATHER_LAT/LON (retrotv_alerts.py). The worst
+# Emergency alerts from the National Weather Service for WEATHER_LAT/LON (retrotv/alerts.py). The worst
 # warnings cut into the show with the alert tones and a voice, then it picks up where it left off; other
 # warnings and watches crawl across the top. Silent while off the air: what's still active crawls at sign-on
-# Live launches cut in: Florida launches, crewed flights and the first flight of a new rocket (see retrotv_launches)
+# Live launches cut in: Florida launches, crewed flights and the first flight of a new rocket (see retrotv.launches)
 LAUNCHES = True
 LAUNCH_CHECK_SECONDS = 15
 LAUNCH_BEFORE_SECONDS = 60     # the stream starts this long before liftoff, after the card
@@ -205,7 +205,7 @@ ALERT_TEST_HOURS = (10, 19)  # the weekly test airs at a break between shows wit
 # Items a crawl can go over. They all carry per-file vf options, so mpv drops the crawl filter when they end
 CRAWL_KINDS = ("act", "detour", "commercial")
 LOTTERY_HOUR = 23          # the nightly lottery drawing, right before the 11 PM show (None = off)
-# Live scores from ESPN's scoreboard (retrotv_scores.py): while games are on, a SCORES lower third shows them
+# Live scores from ESPN's scoreboard (retrotv/scores.py): while games are on, a SCORES lower third shows them
 # across a show (not breaks or music videos) every SCORES_MINUTES. The leagues in crawl order, each with the
 # home team whose game leads it in mustard: Bucs, Magic, Lightning, Rays
 SCORES = True
@@ -282,8 +282,8 @@ HOLIDAY_IDS = {
     "laborday": (("laborday", 0), ("laborday", 0)),
     "veteransday": ((11, 11), (11, 11)),
 }
-# Heritage months: (first, last) as (month, day). Kept subtle on screen (see retrotv_cards.MONTH_LOOKS), and
-# Today in History and Pop Quiz lean toward them (retrotv_screens.TOPICS)
+# Heritage months: (first, last) as (month, day). Kept subtle on screen (see retrotv.cards.MONTH_LOOKS), and
+# Today in History and Pop Quiz lean toward them (retrotv.screens.TOPICS)
 MONTHS = {
     "blackhistory": ((2, 1), (2, 29)),
     "womenshistory": ((3, 1), (3, 31)),
@@ -339,7 +339,7 @@ MUSIC_MIN_FILL = 0.8              # a block airs only if its cached videos fill 
 # These blocks open with the Weekly Countdown (Last.fm, screens.countdown), then the video of the best placed
 # artist in it that's cached
 COUNTDOWN_BLOCKS = ("After School Videos", "Saturday Night Videos", "Music Videos")
-POPUP_VIDEO = True   # VH1-style fact bubbles over the music videos that have facts (retrotv_news.py finds them)
+POPUP_VIDEO = True   # VH1-style fact bubbles over the music videos that have facts (retrotv/news.py finds them)
 
 # Effects
 GLITCH_MINUTES = (40, 80)  # a 1-second tracking roll or interference burst about this often (None = off)
@@ -358,7 +358,7 @@ SNIPE_SECONDS = 30         # a "NEXT: ..." lower third for the last seconds of a
 PROMO_AT = 8.0             # seconds into a show for the NEXT / LATER / TONIGHT lower third (0 = off)
 PROMO_PANEL_SECONDS = 8.0   # long enough to take in the clip that goes with each
 TONIGHT_HOUR = 20          # TONIGHT names the show planned for this hour, until shows near it
-# The day's anniversary episode (picked by retrotv_news.py: first aired on this date years ago) goes next in
+# The day's anniversary episode (picked by retrotv/news.py: first aired on this date years ago) goes next in
 # line at the first show from this hour on that its rating allows, after a From the Vault card
 ANNIVERSARY_HOUR = 20
 
@@ -458,7 +458,7 @@ def pool_of(e):
     return e["category"] if e["category"] in ("commercials", "music") else "shows"
 
 
-# Parsed in retrotv_meta, which retrotv_news.py shares
+# Parsed in retrotv.meta, which retrotv/news.py shares
 music_credit, artist_key = meta.music_credit, meta.artist_key
 
 

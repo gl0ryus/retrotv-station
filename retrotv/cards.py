@@ -48,7 +48,7 @@ HEADER = "&H006E1E3C&"
 TICKER = "&H003D0F0A&"
 ORANGE_RULE = "&H002C8AF0&"
 
-# The program guide's browns, the same as the remote's listings on retrotv.local (retrotv_remote.html)
+# The program guide's browns, the same as the remote's listings on retrotv.local (retrotv/web/remote.html)
 GUIDE_BAND = "&H0017202B&"   # --panel  #2b2017
 GUIDE_TIME = "&H00122A3D&"   # the main channel's column  #3d2a12
 GUIDE_CELL = "&H00143A5C&"   # the main channel's shows  #5c3a14
@@ -56,7 +56,7 @@ GUIDE_NOW = "&H00164D7A&"    # ... and the one on now  #7a4d16
 GUIDE_EDGE = "&H0032527A&"   # --edge  #7a5232
 TAN = "&H0088ADC4&"          # --sky  #c4ad88, the listings' episode lines
 
-# Holiday colours, for the station IDs (retrotv_events) and the cards' holiday looks (LOOKS below)
+# Holiday colours, for the station IDs (retrotv.events) and the cards' holiday looks (LOOKS below)
 ORANGE = "&H001A7AFF&"
 PURPLE = "&H008C1A5B&"
 SLIME = "&H005DE19B&"
@@ -372,7 +372,7 @@ class Look:
 
 HOUSE = Look(BACKGROUND, STRIPES, MUSTARD, CREAM, SHADOW_RED, ORANGE_RULE)
 _PATRIOTIC = ("0x0a0e24", (GOLD, GLORY_RED, WHITE, LIGHT_BLUE), GOLD, CREAM, GLORY_RED, GLORY_RED, _stars)
-# The holiday seasons and days the station dresses up for (retro_station's HOLIDAYS and HOLIDAY_IDS)
+# The holiday seasons and days the station dresses up for (retrotv.station's HOLIDAYS and HOLIDAY_IDS)
 LOOKS = {
     "halloween": Look("0x140a1c", (PUMPKIN, ORANGE, "&H00C04A8E&", SLIME), ORANGE, CREAM, PURPLE, ORANGE, _bats,
                       "Halloween"),
@@ -407,7 +407,7 @@ LOOKS = {
     "laborday": Look(*_PATRIOTIC, "Labor Day"),
     "veteransday": Look(*_PATRIOTIC, "Veterans Day"),
 }
-# The heritage months (retro_station's MONTHS), kept subtle: their stripes and name on Right Back, their name
+# The heritage months (retrotv.station's MONTHS), kept subtle: their stripes and name on Right Back, their name
 # on every other station ID, and on Today in History and Pop Quiz when those have something on the subject.
 # A holiday inside the month takes over on its day
 MONTH_LOOKS = {

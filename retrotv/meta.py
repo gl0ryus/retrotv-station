@@ -7,7 +7,7 @@ import datetime
 import os
 import re
 
-from retrotv_cards import _clean, parse_title
+from retrotv.cards import _clean, parse_title
 
 MONTHS = {m: i + 1 for i, m in enumerate(
     ("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"))}
@@ -221,5 +221,5 @@ def artist_key(name):
 
 
 def popup_key(artist, song):
-    """What a music video's Pop-Up Video facts are filed under (retrotv_news.py writes them)."""
+    """What a music video's Pop-Up Video facts are filed under (retrotv/news.py writes them)."""
     return f"{artist_key(artist)}|{re.sub(r'[^a-z0-9]', '', (song or '').lower())}"

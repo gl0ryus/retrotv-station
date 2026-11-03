@@ -3,7 +3,7 @@ import json, logging, os, shutil, sys, datetime as dt
 logging.basicConfig(level=logging.ERROR)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import retro_station as rs
+from retrotv import station as rs
 
 TMP = "/tmp/fit_check"
 os.makedirs(TMP, exist_ok=True)

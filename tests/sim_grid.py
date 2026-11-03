@@ -41,7 +41,12 @@ class FakeDate(_dt.date):
 fake = types.SimpleNamespace(datetime=FakeDT, date=FakeDate, timedelta=_dt.timedelta, time=_dt.time)
 import random
 random.seed(seed)
-import retro_station as rs, retrotv_cards as cards, retrotv_meta as meta, retrotv_events as events, retrotv_screens as screens, retrotv_schedule as schedule
+from retrotv import station as rs
+from retrotv import cards
+from retrotv import meta
+from retrotv import events
+from retrotv import screens
+from retrotv import schedule
 for m in (rs, meta, cards, events, screens):
     m.datetime = fake
 cards.CARDS_DIR = SIM + "/cards"

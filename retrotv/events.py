@@ -1,7 +1,7 @@
 """
 The GL0RYUS Network's occasions: holiday station IDs, holiday reminders, marathon openers, the "NEXT" lower third,
 the late-night lottery drawing, the New Year's countdown, and the sign-off and sign-on (anthem,
-the set switching off, colour bars). Same approach as retrotv_cards: ASS over an mpv lavfi URL.
+the set switching off, colour bars). Same approach as retrotv.cards: ASS over an mpv lavfi URL.
 """
 import datetime
 import math
@@ -9,8 +9,8 @@ import os
 import random
 import subprocess
 
-import retrotv_cards as cards
-from retrotv_cards import (
+from retrotv import cards
+from retrotv.cards import (
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, MUSTARD, SHADOW_RED, SKY, W, H, WHITE, YELLOW,
     ASSETS_DIR, CHANNEL, FONTS_DIR, NETWORK, RENDER, Card, Script, circle, clip_text, clock, esc, fit, info_header, look,
     music, rect, stripes,
@@ -458,7 +458,7 @@ def popups(facts, duration, begin=0.0):
     """An ASS file of Pop-Up Video bubbles for the vf chain: the facts in turn over a music video of
     `duration` seconds, spread from POPUP_FIRST to POPUP_END_GAP before the end, at file times. Bubbles
     before `begin` (where playback joins) are left out. None if none fit."""
-    from retrotv_screens import wrap
+    from retrotv.screens import wrap
     span = duration - POPUP_END_GAP - POPUP_FIRST - POPUP_SECONDS
     if span < 0 or not facts:
         return None

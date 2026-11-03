@@ -21,7 +21,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from retrotv_io import write_json
+from retrotv.jsonio import write_json
 
 logger = logging.getLogger("RetroTV")
 

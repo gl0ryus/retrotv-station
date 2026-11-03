@@ -17,7 +17,7 @@ FROZEN_FILES = ("retrotv_manifest.json", "retrotv_index.json", "retrotv_schedule
 
 
 def station_modules():
-    return [m for name, m in list(sys.modules.items()) if m and (name == "retro_station" or name.startswith("retrotv"))]
+    return [m for name, m in list(sys.modules.items()) if m and (name == "retrotv" or name.startswith("retrotv."))]
 
 
 def set_everywhere(name, value):

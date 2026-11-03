@@ -5,7 +5,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 _FH = logging.FileHandler
 logging.FileHandler = lambda path, *a, **k: _FH("/tmp/sim/rt.log", mode="w")
-import retro_station as rs, retrotv_cards as cards, retrotv_remote as remote
+from retrotv import station as rs
+from retrotv import cards
+from retrotv import remote
 cards.CARDS_DIR = "/tmp/sim/cards"
 shutil.copy(os.path.expanduser("~/retrotv_manifest.json"), "/tmp/sim/manifest.json")
 import harness

@@ -2,7 +2,11 @@
 # With "live" it also fetches the real National Weather Service and renders the cards to /tmp/wx_cards.
 import datetime, io, json, os, re, shutil, sys, tempfile, time, urllib.error, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-import retro_station as rs, retrotv_cards as cards, retrotv_screens as screens, retrotv_weather as wx, retrotv_health as health
+from retrotv import station as rs
+from retrotv import cards
+from retrotv import screens
+from retrotv import weather as wx
+from retrotv import health
 
 TMP = tempfile.mkdtemp(prefix="wx_test")
 real_location = rs.WEATHER_LAT, rs.WEATHER_LON

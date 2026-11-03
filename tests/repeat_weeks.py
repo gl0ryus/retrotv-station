@@ -2,7 +2,9 @@
 import json, logging, math, os, sys, collections
 logging.basicConfig(level=logging.ERROR)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-import retro_station as rs, retrotv_schedule as sch, retrotv_meta as meta
+from retrotv import station as rs
+from retrotv import schedule as sch
+from retrotv import meta
 doc = sch.load()
 idx = json.load(open(os.path.expanduser("~/retrotv_index.json")))["media_map"]
 items = sch.item_files(idx, rs.MEDIA_ROOT)

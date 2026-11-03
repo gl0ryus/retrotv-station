@@ -2,7 +2,9 @@
 import glob, http.server, json, os, re, shutil, sys, tempfile, threading, time, urllib.request
 ST = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the station: this is its tests/ folder
 sys.path.insert(0, ST)
-import retro_station as rs, retrotv_health as health, retrotv_launches as launches
+from retrotv import station as rs
+from retrotv import health
+from retrotv import launches
 
 TMP = tempfile.mkdtemp(prefix="health_test")
 health.DATA_DIR = TMP
@@ -18,8 +20,8 @@ def check(ok, what):
 
 # --- Every host the code calls is on the page
 listed = set(health.BY_HOST)
-for path in glob.glob(ST + "/retrotv_*.py") + [ST + "/retro_station.py"]:
-    if path.endswith("retrotv_health.py"):
+for path in glob.glob(ST + "/retrotv/*.py"):
+    if path.endswith("retrotv/health.py"):
         continue
     with open(path, encoding="utf-8") as f:
         for host in re.findall(r"https://([a-z0-9.-]+\.[a-z]+)", f.read()):

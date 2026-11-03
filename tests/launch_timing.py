@@ -1,7 +1,7 @@
 # The cut-in decision without the network: Launches.due/stream_for/still_going with fake Launch Library data.
 import datetime, os, sys, tempfile, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-import retrotv_launches as l
+from retrotv import launches as l
 
 l.STATE_FILE = os.path.join(tempfile.mkdtemp(), "state.json")
 stamp = lambda t: datetime.datetime.fromtimestamp(t, datetime.timezone.utc).isoformat().replace("+00:00", "Z")

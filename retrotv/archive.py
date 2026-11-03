@@ -1,6 +1,6 @@
 """
 Public domain video from the Internet Archive (archive.org): old TV, movies, cartoons, short films and
-commercials, aired without being kept on the NAS. The station's archive worker (retro_station's CacheManager)
+commercials, aired without being kept on the NAS. The station's archive worker (retrotv.station's CacheManager)
 asks pick() for one file at a time, downloads it to the SD card just ahead of airing, and deletes it once it
 has aired.
 
@@ -22,8 +22,8 @@ import time
 import urllib.parse
 import urllib.request
 
-from retrotv_io import USER_AGENT, get_json, write_json
-from retrotv_screens import DATA_DIR
+from retrotv.jsonio import USER_AGENT, get_json, write_json
+from retrotv.screens import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 
@@ -117,7 +117,7 @@ def _get(url):
 
 
 def open_url(url):
-    """A download, for retro_station's paced_copy to read from."""
+    """A download, for retrotv.station's paced_copy to read from."""
     return urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": USER_AGENT}), timeout=30)
 
 

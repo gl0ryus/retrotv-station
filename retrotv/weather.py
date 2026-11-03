@@ -13,9 +13,9 @@ import time
 import urllib.parse
 import zoneinfo
 
-import retrotv_health as health
-from retrotv_cards import WEATHER_FILE
-from retrotv_io import get_json, write_json
+from retrotv import health
+from retrotv.cards import WEATHER_FILE
+from retrotv.jsonio import get_json, write_json
 
 logger = logging.getLogger("RetroTV")
 

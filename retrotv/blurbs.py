@@ -2,15 +2,15 @@
 Text bumps in the late-night cartoon block tradition: lowercase white type on black, a few beats long, over a
 lo-fi or vaporwave bed (music/blurb_*.ogg, made by music_src/blurb_beds.py), ending on a small "g|tv".
 
-What they say follows the level the station passes for the hour (retro_station's BLURB_CHEEKY_HOUR and
+What they say follows the level the station passes for the hour (retrotv.station's BLURB_CHEEKY_HOUR and
 BLURB_RAUNCHY_HOUR): by day clean facts ("did you know?", "ain't that interesting?"), food for thought and dad
 jokes; cheekier from 9 PM; raunchy from 11 PM to sign-off, crude but never racist, sexist, religious or
 political; cursing and vulgar are fine from 9 PM. Facts come from uselessfacts.jsph.pl, dad jokes from
 icanhazdadjoke.com, the late-night jokes from JokeAPI (its own flags keep the hateful ones out), and our lines
-from retrotv_blurbs.txt. From 9 PM, real odd-news headlines air with a quip at the hour's level (NEWS_FILE),
-and bumps in a show's breaks riff on that show (SHOW_RIFFS_FILE); retrotv_news.py writes both on its own timer. Now and then a bump ends on a reaction ("damn, that's
+from retrotv/blurbs.txt. From 9 PM, real odd-news headlines air with a quip at the hour's level (NEWS_FILE),
+and bumps in a show's breaks riff on that show (SHOW_RIFFS_FILE); retrotv/news.py writes both on its own timer. Now and then a bump ends on a reaction ("damn, that's
 crazy.", "ok but who asked?"), and facts and headlines open with a kicker; both come from
-retrotv_blurbs_extras.txt. Nothing airs again until SEEN_KEEP others have.
+retrotv/blurbs_extras.txt. Nothing airs again until SEEN_KEEP others have.
 """
 import datetime
 import hashlib
@@ -20,27 +20,27 @@ import os
 import random
 import re
 
-import retrotv_health as health
-from retrotv_cards import BARLOW_S, CHANNEL, WHITE, Card, Script, esc, lavfi_url, music
-from retrotv_io import get_json, write_json
-from retrotv_screens import DATA_DIR, wrap
+from retrotv import health
+from retrotv.cards import BARLOW_S, CHANNEL, WHITE, Card, Script, esc, lavfi_url, music
+from retrotv.jsonio import get_json, write_json
+from retrotv.screens import DATA_DIR, wrap
 
 logger = logging.getLogger("RetroTV")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LINES_FILE = os.path.join(HERE, "retrotv_blurbs.txt")           # the bumps we wrote
-EXTRAS_FILE = os.path.join(HERE, "retrotv_blurbs_extras.txt")   # reactions, and what facts open with
+LINES_FILE = os.path.join(HERE, "blurbs.txt")           # the bumps we wrote
+EXTRAS_FILE = os.path.join(HERE, "blurbs_extras.txt")   # reactions, and what facts open with
 SEEN_FILE = os.path.join(DATA_DIR, "blurbs.json")   # what has aired lately, so nothing repeats soon
 SEEN_KEEP = 1500
-NEWS_FILE = os.path.join(DATA_DIR, "news_quips.json")   # headlines and their quips, written by retrotv_news.py
+NEWS_FILE = os.path.join(DATA_DIR, "news_quips.json")   # headlines and their quips, written by retrotv/news.py
 NEWS_MAX_AGE_HOURS = 48  # older headlines aren't news any more: they don't air, and don't get quips written
-SHOW_RIFFS_FILE = os.path.join(DATA_DIR, "show_riffs.json")   # riffs on the shows, by name, from retrotv_news.py
+SHOW_RIFFS_FILE = os.path.join(DATA_DIR, "show_riffs.json")   # riffs on the shows, by name, from retrotv/news.py
 LEVELS = ("clean", "cheeky", "raunchy")
 BEDS = ("blurb_lofi1.ogg", "blurb_lofi2.ogg", "blurb_vapor1.ogg", "blurb_vapor2.ogg")
 MAX_CHARS = 220          # anything longer doesn't read as a bump
 TEXT_SIZE, KICKER_SIZE, SIGN_SIZE = 55, 44, 37   # the words, the kicker above them, the g|tv at the end
 GREY = "&H00A8A8A8&"     # the kicker, a step behind the words
-# What can air at each level: (kicker, source, weight). "ours" is retrotv_blurbs.txt with its own kickers; the
+# What can air at each level: (kicker, source, weight). "ours" is retrotv/blurbs.txt with its own kickers; the
 # kicker of a fact or a headline (None) comes from EXTRAS_FILE, see KICKERS
 MIX = {
     "clean": ((None, "fact", 4), ("dad joke", "dad", 3), (None, "ours", 4)),
@@ -179,7 +179,7 @@ def _from_ours(level, seen):
 
 
 def riff_key(show, riff):
-    """What a riff on a show is remembered by once it has aired (retrotv_news.py checks these too)."""
+    """What a riff on a show is remembered by once it has aired (retrotv/news.py checks these too)."""
     return "show-" + hashlib.sha1(f"{show}|{riff}".encode()).hexdigest()[:12]
 
 

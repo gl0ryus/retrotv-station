@@ -1,6 +1,6 @@
-"""The first draft of the weekly grid. retrotv_schedule.seed() reads it until a schedule is saved from /schedule.
+"""The first draft of the weekly grid. retrotv.schedule.seed() reads it until a schedule is saved from /schedule.
 
-PROGRAMS: key -> (title, items, and "pool" when it plays whatever has waited longest). See retrotv_schedule for items.
+PROGRAMS: key -> (title, items, and "pool" when it plays whatever has waited longest). See retrotv.schedule for items.
 WEEK: for each day (0 = Monday), (start, program key) in broadcast order, hours past 24 meaning after midnight, as
 everywhere else in the station. A program runs until the next entry.
 """

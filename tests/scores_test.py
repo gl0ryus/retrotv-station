@@ -1,7 +1,8 @@
 # The score card, off the air. Runs on the Pi: python3 -I scores_test.py [video file to render previews over]
 import io, json, os, shutil, subprocess, sys, tempfile, time, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-import retrotv_cards as cards, retrotv_scores as scores
+from retrotv import cards
+from retrotv import scores
 
 TMP = tempfile.mkdtemp(prefix="scores_test")
 cards.CARDS_DIR = TMP + "/cards"

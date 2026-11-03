@@ -2,7 +2,7 @@ import os
 """Checks the music block's rejoin and alert-resume math (Station.join_point / act_at) on a made-up block."""
 import sys, datetime as dt
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
-import retro_station as rs
+from retrotv import station as rs
 vids = [(f"/mnt/tower/.retrotv/videos/music_videos/2004 - A{i} - Song{i}.mp4", {"file": f"f{i}", "duration": 200.0}) for i in range(7)]
 b = rs.MusicBlock("Music Videos", 30, vids, [2])
 b.plan_slot(dt.datetime(2026, 10, 29, 19, 30))

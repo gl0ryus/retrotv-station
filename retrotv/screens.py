@@ -1,6 +1,6 @@
 """
 More break-time screens for the GL0RYUS Network: Pop Quiz, Today in History, Launch Watch,
-Who's in Space and Markets. Same approach as retrotv_cards (ASS over an mpv lavfi URL); the data comes
+Who's in Space and Markets. Same approach as retrotv.cards (ASS over an mpv lavfi URL); the data comes
 from free public APIs and is cached on the SD card so a flaky connection only means a stale screen.
 """
 import datetime
@@ -16,8 +16,8 @@ import time
 import urllib.error
 import urllib.parse
 
-from retrotv_io import USER_AGENT, get_json, write_json  # USER_AGENT: other modules still import it from here
-from retrotv_cards import (weather_as_of, 
+from retrotv.jsonio import USER_AGENT, get_json, write_json  # USER_AGENT: other modules still import it from here
+from retrotv.cards import (weather_as_of, 
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, SHADOW_RED, SKY, W, WHITE,
     YELLOW, ASSETS_DIR, CHANNEL, WMO, Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look,
     music, rect, text_width,
@@ -32,10 +32,10 @@ QUIZ_BACKGROUND = "0x1c0a36"
 QUIZ_BAND = "&H00481A30&"
 GREEN = "&H0040C050&"
 FLORIDA_LOCATIONS = (12, 27)  # Cape Canaveral SFS, Kennedy Space Center
-SKY_FILE = os.path.join(DATA_DIR, "sky.json")   # tonight's sky over the house, worked out by retrotv_news.py
-POPUPS_FILE = os.path.join(DATA_DIR, "popups.json")   # Pop-Up Video facts by meta.popup_key, from retrotv_news.py
-ANNIVERSARY_FILE = os.path.join(DATA_DIR, "anniversary.json")   # each day's anniversary episode, from retrotv_news.py
-ART_FILE = os.path.join(DATA_DIR, "art.json")   # the day's Art Break picture, drawn by Claude (retrotv_news.py)
+SKY_FILE = os.path.join(DATA_DIR, "sky.json")   # tonight's sky over the house, worked out by retrotv/news.py
+POPUPS_FILE = os.path.join(DATA_DIR, "popups.json")   # Pop-Up Video facts by meta.popup_key, from retrotv/news.py
+ANNIVERSARY_FILE = os.path.join(DATA_DIR, "anniversary.json")   # each day's anniversary episode, from retrotv/news.py
+ART_FILE = os.path.join(DATA_DIR, "art.json")   # the day's Art Break picture, drawn by Claude (retrotv/news.py)
 ART_W, ART_H = 800, 356                         # its canvas, between the info header and the caption
 
 
@@ -101,7 +101,7 @@ def starfield(s, d, seed, top=0, count=80):
 
 # --- Holidays and heritage months ---
 
-# What fits a holiday or a heritage month (retro_station's HOLIDAYS, HOLIDAY_IDS and MONTHS): The Trivia API
+# What fits a holiday or a heritage month (retrotv.station's HOLIDAYS, HOLIDAY_IDS and MONTHS): The Trivia API
 # tags to fetch questions from, the words a quiz question or a Wikipedia "on this day" entry has to mention
 # (tagged questions too, since a tag can be broader), and for births, what to look for in the person's page
 # summary when the words alone wouldn't find them. Few questions fit (a dozen or two a year per subject), so
@@ -861,7 +861,7 @@ def anniversary(info, name, episode, now, season=None):
 LASTFM_KEY_FILE = os.path.join(HOME_DIR, ".config", "retrotv", "lastfm.key")   # on the SD card, never logged
 LASTFM_USER = "LOLDAN"
 LASTFM_API = "https://ws.audioscrobbler.com/2.0/?method={}&user={}&period=7day&limit={}&format=json&api_key={}"
-COUNTDOWN_SECONDS = 28.0   # retro_station plans music blocks that open with it around this
+COUNTDOWN_SECONDS = 28.0   # retrotv.station plans music blocks that open with it around this
 
 
 def weekly_chart():

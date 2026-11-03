@@ -32,19 +32,19 @@ import xml.etree.ElementTree as ET
 
 import anthropic
 
-import retrotv_health as health
-from retrotv_io import get_json, write_json
+from retrotv import health
+from retrotv.jsonio import get_json, write_json
 
-from retrotv_blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
+from retrotv.blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
                             riff_key, _seen as aired_lately)
-from retrotv_meta import air_date, artist_key, music_credit, popup_key
-from retrotv_screens import (ANNIVERSARY_FILE, ART_FILE, ART_H, ART_PATH, ART_W, DATA_DIR, POPUPS_FILE, SKY_FILE,
+from retrotv.meta import air_date, artist_key, music_credit, popup_key
+from retrotv.screens import (ANNIVERSARY_FILE, ART_FILE, ART_H, ART_PATH, ART_W, DATA_DIR, POPUPS_FILE, SKY_FILE,
                              USER_AGENT)
 
 logger = logging.getLogger("RetroTV.news")
 
 FEED = "https://rss.upi.com/news/odd_news.rss"
-GUIDE_URL = "http://127.0.0.1/api/guide"   # the phone remote's guide (retro_station's REMOTE_PORT)
+GUIDE_URL = "http://127.0.0.1/api/guide"   # the phone remote's guide (retrotv.station's REMOTE_PORT)
 KEY_FILE = os.path.expanduser("~/.config/retrotv/anthropic.key")
 MODEL = "claude-opus-5-5"
 MAX_NEW = 12             # headlines sent per run; any more wait for the next one
@@ -52,17 +52,17 @@ MAX_SHOWS = 6            # shows sent per run, likewise
 RIFFS_PER_LEVEL = 4      # asked for per show and level each time
 RIFFS_KEEP = 12          # kept per show and level; the oldest go first
 SKIPPED_KEEP = 500       # headlines and shows Claude passed on, remembered so they aren't sent again
-LOCATION_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "location.json")   # as retro_station's
+LOCATION_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "location.json")   # as retrotv.station's
 SKYFIELD_DIR = os.path.join(DATA_DIR, "skyfield")   # the planets' ephemeris (de421.bsp, 17 MB), fetched once
 ISS_TLE = "https://celestrak.org/NORAD/elements/gp.php?CATNR=25544&FORMAT=tle"
-SKY_SIGN_OFF_HOUR = 2    # the night ends at retro_station's SIGN_OFF_HOUR, the next day
+SKY_SIGN_OFF_HOUR = 2    # the night ends at retrotv.station's SIGN_OFF_HOUR, the next day
 PLANETS = (("Mercury", "mercury"), ("Venus", "venus"), ("Mars", "mars"), ("Jupiter", "jupiter barycenter"),
            ("Saturn", "saturn barycenter"))
 PREFIX = re.compile(r"^(?:look|watch|video|listen|photos?)\s*:\s*", re.I)   # UPI's "Watch: ..." and the like
-MANIFEST_FILE = os.path.expanduser("~/retrotv_manifest.json")   # retro_station's cache manifest
-INDEX_FILE = os.path.expanduser("~/retrotv_index.json")         # retro_station's NAS listing
-SHOW_CATEGORIES = ("videos", "g4", "movies")                    # retro_station's MAIN_CATEGORIES
-SIGN_ON_HOUR = 9         # retro_station's: until then it's still the last broadcast day
+MANIFEST_FILE = os.path.expanduser("~/retrotv_manifest.json")   # retrotv.station's cache manifest
+INDEX_FILE = os.path.expanduser("~/retrotv_index.json")         # retrotv.station's NAS listing
+SHOW_CATEGORIES = ("videos", "g4", "movies")                    # retrotv.station's MAIN_CATEGORIES
+SIGN_ON_HOUR = 9         # retrotv.station's: until then it's still the last broadcast day
 ANNIVERSARY_MIN_YEARS = 5
 ANNIVERSARY_KEEP_DAYS = 14
 PARTIAL = re.compile(r"incomplete|\bpart \d|\bpt\.? ?\d|\bclip\b|\bpromo\b", re.I)   # passed over if there's better
@@ -509,7 +509,7 @@ def _broadcast_day():
 
 def _anniversary_episodes(day, index):
     """[(src, first aired)] for the shows in the NAS listing first aired on day's date ANNIVERSARY_MIN_YEARS
-    or more years before, tapes aside (retro_station's is_tape: hours-long recordings)."""
+    or more years before, tapes aside (retrotv.station's is_tape: hours-long recordings)."""
     out = []
     for category in SHOW_CATEGORIES:
         for src in index.get(category, []):

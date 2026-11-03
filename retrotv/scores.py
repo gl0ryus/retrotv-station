@@ -10,13 +10,13 @@ import re
 import subprocess
 import time
 
-from retrotv_alerts import LABEL_TEXT
-from retrotv_art import download_image
-from retrotv_cards import ARCHIVO, BARLOW_X, CREAM, FONTS_DIR, H, MUSTARD, Script, W, rounded
-from retrotv_cards import fit as cards_fit
-from retrotv_events import BAR_RIGHT, BAR_SLANT, lower_third
-from retrotv_io import get_json
-from retrotv_screens import DATA_DIR
+from retrotv.alerts import LABEL_TEXT
+from retrotv.art import download_image
+from retrotv.cards import ARCHIVO, BARLOW_X, CREAM, FONTS_DIR, H, MUSTARD, Script, W, rounded
+from retrotv.cards import fit as cards_fit
+from retrotv.events import BAR_RIGHT, BAR_SLANT, lower_third
+from retrotv.jsonio import get_json
+from retrotv.screens import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 

@@ -24,13 +24,13 @@ import time
 import unicodedata
 import wave
 
-import retrotv_cards as cards
-from retrotv_cards import (
+from retrotv import cards
+from retrotv.cards import (
     ARCHIVO, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, ORANGE_RULE, W, WHITE, YELLOW, Card, Script,
     clip_text, clock, fit, lavfi_url, music, rect, text_width,
 )
-from retrotv_io import get_json, write_json
-from retrotv_screens import TEXT_FACTOR, wrap
+from retrotv.jsonio import get_json, write_json
+from retrotv.screens import TEXT_FACTOR, wrap
 
 logger = logging.getLogger("RetroTV")
 

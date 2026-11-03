@@ -17,7 +17,7 @@ import re
 import statistics
 import subprocess
 import threading
-from retrotv_io import write_json
+from retrotv.jsonio import write_json
 
 logger = logging.getLogger("RetroTV")
 
@@ -128,8 +128,8 @@ def _probe(path):
 
 
 def seed():
-    """The first draft, from retrotv_grid, until a schedule has been saved."""
-    import retrotv_grid as grid
+    """The first draft, from retrotv.grid, until a schedule has been saved."""
+    from retrotv import grid
     groups = [{"id": key, "name": spec[0], "items": list(spec[1]), "mode": "shuffle" if len(spec) > 2 else "in_order",
                "color": grid.COLOR_OF.get(key, "sitcom")} for key, spec in grid.PROGRAMS.items()]
     slots = []
