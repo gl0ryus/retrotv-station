@@ -33,6 +33,7 @@ import xml.etree.ElementTree as ET
 import anthropic
 
 import retrotv_health as health
+from retrotv_io import get_json, write_json
 
 from retrotv_blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
                             riff_key, _seen as aired_lately)
@@ -227,11 +228,7 @@ def load(path):
 
 
 def save(path, data):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump({**data, "updated": _now().isoformat()}, f, indent=1)
-    os.replace(tmp, path)   # the station may be reading it
+    write_json(path, {**data, "updated": _now().isoformat()}, indent=1)   # the station may be reading it
 
 
 def ask(system, content, schema):
@@ -332,9 +329,7 @@ def quip_headlines():
 
 def coming_up():
     """[(name, episode)] for the shows coming up on the main channel, in order, from the remote's guide."""
-    req = urllib.request.Request(GUIDE_URL, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        guide = json.load(r)
+    guide = get_json(GUIDE_URL, timeout=10)
     main = next(c for c in guide["channels"] if c["main"])
     out = {}
     for p in main["programs"]:
@@ -392,8 +387,7 @@ def _wiki(**params):
     for attempt in range(2):
         time.sleep(1.0)
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": USER_AGENT}), timeout=20) as r:
-                return json.load(r)
+            return get_json(url, timeout=20)
         except urllib.error.HTTPError as e:
             if e.code != 429 or attempt:
                 raise

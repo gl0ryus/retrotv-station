@@ -8,6 +8,7 @@ the page reads both. Nothing is recorded until install() is called, so tests and
 BadFiles is the log of video files the player couldn't load, and of which are kept off the air until reviewed.
 """
 import atexit
+import copy
 import ipaddress
 import json
 import logging
@@ -20,6 +21,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from retrotv_io import write_json
+
 logger = logging.getLogger("RetroTV")
 
 DATA_DIR = os.path.expanduser("~/retrotv_data")
@@ -29,6 +32,7 @@ FAILS_TO_DOWN = 3         # failures in a row before a service counts as down ra
 FAILS_KEPT = 200
 DAY = 86400
 ALERTS_PATH = "/alerts"
+JOB_SLACK_SECONDS = 300   # beyond 3 of its waits, how long a background job's run may take before it counts as stuck
 NAS_CHECK_SECONDS = 300   # the page only looks at the NAS this often, and only while someone's looking at the page
 NAS_CHECK_TIMEOUT = 5
 HOT_C = 80.0
@@ -225,13 +229,9 @@ def _flush(force=False):
         return
     with _lock:
         _flushed = time.time()
-        text = json.dumps(_state)
-    tmp = f"{_file}.{threading.get_ident()}.tmp"
+        snapshot = copy.deepcopy(_state)
     try:
-        os.makedirs(DATA_DIR, exist_ok=True)
-        with open(tmp, "w") as f:
-            f.write(text)
-        os.replace(tmp, _file)
+        write_json(_file, snapshot)
     except OSError as e:
         logger.warning(f"Could not save the health results: {e}")
 
@@ -289,6 +289,38 @@ def service_rows(on_air, now=None):
                    error=s["error"] if s else "", fails_today=sum(t > now - DAY for t in s["fails"]) if s else 0)
         rows.append(row)
     return rows
+
+
+# --- Background jobs ---
+
+_beats = {}   # job name -> (when it last finished a run, seconds it usually waits between runs)
+
+
+def repeat(name, step, wait):
+    """Runs step() over and over in a background thread. step returns the seconds until its next run, or None for
+    `wait`; an exception is logged and waited out. Each finished run is a heartbeat: a job that stops finishing its
+    runs (stuck on a network call or a disk) shows as down on the health page."""
+    def loop():
+        while True:
+            after = None
+            try:
+                after = step()
+            except Exception:
+                logger.exception(f"{name} failed")
+            _beats[name] = (time.time(), wait)
+            time.sleep(wait if after is None else after)
+    _beats[name] = (time.time(), wait)
+    threading.Thread(target=loop, daemon=True, name=name).start()
+
+
+def jobs_row(now=None):
+    """The health page's row for the background jobs: down if one hasn't finished a run in a good while."""
+    now = now or time.time()
+    stuck = [name for name, (last, wait) in sorted(_beats.items()) if now - last > 3 * wait + JOB_SLACK_SECONDS]
+    if stuck:
+        return {"id": "jobs", "name": "Background jobs", "status": "down", "message": "Stuck: " + ", ".join(stuck)}
+    return {"id": "jobs", "name": "Background jobs", "status": "ok" if _beats else "idle",
+            "message": ", ".join(sorted(_beats)) if _beats else "None running"}
 
 
 # --- The Pi itself ---
@@ -351,8 +383,8 @@ def _power_row():
     return status, ", ".join(notes) or "Can't tell"
 
 
-def report(on_air, on_air_row, nas_root, disks, min_free_gb, bad_files):
-    """Everything the health page shows. disks: (id, name, path, must be mounted)."""
+def report(on_air, on_air_row, nas_root, disks, min_free_gb, bad_files, more=()):
+    """Everything the health page shows. disks: (id, name, path, must be mounted); more: further rows about the Pi."""
     box = [{"id": "on-air", "name": "On the air", "status": on_air_row[0], "message": on_air_row[1]}]
     status, message = _nas_row(nas_root)
     box.append({"id": "nas", "name": "NAS", "status": status, "message": message})
@@ -361,6 +393,7 @@ def report(on_air, on_air_row, nas_root, disks, min_free_gb, bad_files):
         box.append({"id": id, "name": name, "status": status, "message": message})
     status, message = _power_row()
     box.append({"id": "power", "name": "Temperature and power", "status": status, "message": message})
+    box += list(more)
     return {"time": time.time(), "box": box, "services": service_rows(on_air), "bad_files": bad_files.rows()}
 
 
@@ -377,12 +410,8 @@ class BadFiles:
         self.records = [r for r in records if isinstance(r, dict) and r.get("id")]
 
     def _save(self):
-        tmp = self.path + ".tmp"
         try:
-            os.makedirs(os.path.dirname(self.path), exist_ok=True)
-            with open(tmp, "w") as f:
-                json.dump({"files": self.records}, f, indent=1)
-            os.replace(tmp, self.path)
+            write_json(self.path, {"files": self.records}, indent=1)
         except OSError as e:
             logger.error(f"Could not save the bad file log: {e}")
 

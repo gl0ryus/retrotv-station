@@ -14,7 +14,8 @@ import time
 import urllib.parse
 import urllib.request
 
-from retrotv_screens import DATA_DIR, USER_AGENT
+from retrotv_io import USER_AGENT, get_json, write_json
+from retrotv_screens import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 
@@ -115,9 +116,7 @@ def _search_name(name):
 
 
 def _get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        return json.load(r)
+    return get_json(url, timeout=15)
 
 
 def pick_show(results, name, year=None):
@@ -223,11 +222,7 @@ def _load_lookups():
 
 
 def _save_lookups(lookups):
-    os.makedirs(ART_DIR, exist_ok=True)
-    tmp = LOOKUPS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(lookups, f, indent=0)
-    os.replace(tmp, LOOKUPS_FILE)
+    write_json(LOOKUPS_FILE, lookups, indent=0)
 
 
 def refresh(wanted):

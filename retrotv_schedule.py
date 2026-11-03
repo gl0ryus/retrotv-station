@@ -17,6 +17,7 @@ import re
 import statistics
 import subprocess
 import threading
+from retrotv_io import write_json
 
 logger = logging.getLogger("RetroTV")
 
@@ -279,9 +280,4 @@ def _read_json(path, default):
 
 
 def _write_json(path, data):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    write_json(path, data, sync=True)   # the schedule is the one thing a power cut mustn't lose

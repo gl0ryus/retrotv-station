@@ -22,7 +22,8 @@ import time
 import urllib.parse
 import urllib.request
 
-from retrotv_screens import DATA_DIR, USER_AGENT
+from retrotv_io import USER_AGENT, get_json, write_json
+from retrotv_screens import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 
@@ -112,9 +113,7 @@ _state = None
 # --- archive.org ---
 
 def _get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return json.load(r)
+    return get_json(url, timeout=20)
 
 
 def open_url(url):
@@ -264,11 +263,7 @@ def _load():
 
 
 def _save(state):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = STATE_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(state, f)
-    os.replace(tmp, STATE_FILE)
+    write_json(STATE_FILE, state)
 
 
 def _catalog(state):

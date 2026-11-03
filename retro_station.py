@@ -24,6 +24,7 @@ import retrotv_launches as launches
 import retrotv_health as health
 import retrotv_weather as wx
 import retrotv_art as posters
+from retrotv_io import write_json
 import retrotv_alerts as alerts
 import retrotv_blurbs as blurbs
 import retrotv_archive as archive
@@ -102,6 +103,10 @@ MPV_SOCKET = "/tmp/retrotv-mpv.sock"
 # copies are also paced while on the air, see COPY_MB_PER_SEC_ON_AIR)
 PLAYER_CMD = ["/usr/bin/mpv", "--profile=retrotv", "--really-quiet", "--idle=yes", "--force-window=yes",
               "--cache=yes", "--demuxer-max-bytes=64MiB", f"--input-ipc-server={MPV_SOCKET}"]
+# mpv's memory creeps up while it runs (2.8 GB after 13 hours on 2026-11-03, which hung the Pi): past this it's
+# restarted at the next break, never during a show. It costs a second of black
+PLAYER_MEMORY_MB = 1200
+PLAYER_MEMORY_CHECK_SECONDS = 60
 SHOW_TITLE_SECONDS = 0     # show a show's name on screen as it starts (0 = off; the promo lower third and the
                            # Up Next card already name it); commercials never get one
 ASSETS_DIR = os.path.join(HOME_DIR, "retrotv_assets")
@@ -406,14 +411,6 @@ def load_location():
 
 
 WEATHER_PLACE, WEATHER_LAT, WEATHER_LON = load_location()
-
-
-def write_json(path, data):
-    """Writes through a temp file so a crash never leaves half a JSON file behind."""
-    tmp = path + ".tmp"
-    with open(tmp, 'w') as f:
-        json.dump(data, f)
-    os.replace(tmp, path)
 
 
 # --- Schedule ---
@@ -2460,6 +2457,8 @@ class Player:
         self.proc = None
         self.sock = None
         self.alive = False
+        self.memory_checked = 0.0
+        self.memory_restarts = 0
         self.volume, self.muted = 100, False
         try:
             with open(REMOTE_STATE_FILE) as f:
@@ -2566,6 +2565,34 @@ class Player:
         time.sleep(2)
         self._start()
 
+    def memory_mb(self):
+        """mpv's resident memory in MB, or None when it isn't running."""
+        if not self.proc or self.proc.poll() is not None:
+            return None
+        try:
+            with open(f"/proc/{self.proc.pid}/status") as f:
+                return next(int(line.split()[1]) // 1024 for line in f if line.startswith("VmRSS:"))
+        except (OSError, StopIteration, ValueError):
+            return None
+
+    def _too_big(self):
+        if not PLAYER_MEMORY_MB or time.time() - self.memory_checked < PLAYER_MEMORY_CHECK_SECONDS:
+            return False
+        self.memory_checked = time.time()
+        used = self.memory_mb()
+        return used is not None and used > PLAYER_MEMORY_MB
+
+    def _restart_for_memory(self, epoch):
+        """Lets what's playing finish, then starts mpv afresh. False if a flush() came first."""
+        with self.cv:
+            self.cv.wait_for(lambda: not self.pending or not self.alive or self.epoch != epoch)
+            if self.epoch != epoch:
+                return False
+        logger.warning(f"Player using {self.memory_mb()} MB, restarting it to free the memory.")
+        self.memory_restarts += 1
+        self._start()
+        return True
+
     def play(self, item, epoch=None):
         """Queues an item; blocks while mpv already has one playing and one waiting. Returns False, dropping
         the item, if a flush() has happened since `epoch` (default: since the call)."""
@@ -2577,6 +2604,9 @@ class Player:
             self.cv.wait_for(lambda: len(self.pending) < self.AHEAD or not self.alive or self.epoch != epoch)
             dropped = self.epoch != epoch
         if dropped:
+            self._finish([(item, {"reason": "stop"})])
+            return False
+        if item.kind not in ("act", "detour", "launch") and self._too_big() and not self._restart_for_memory(epoch):
             self._finish([(item, {"reason": "stop"})])
             return False
         if not self.alive or (self.proc and self.proc.poll() is not None):
@@ -2969,6 +2999,8 @@ class Station:
         self.eas_follow = None      # what airs after that card: a live launch
         self.launches = launches.Launches()
         self.launch_live = None     # (launch, its Item, when it cut in)
+        self.clips_tried = {}       # src -> when its clip was last tried, so a failure isn't retried at once
+        self.clips_pruned = time.time()
         self.eas_resume = None      # (show, file position) to pick back up after it
         self.eas_from_detour = False
         self.eas_until = 0.0        # no second cut-in or crawl before this
@@ -3717,21 +3749,15 @@ class Station:
                 return clip
         return posters.thumb(show.name)
 
-    def watch_clips(self):
-        """Background thread: cuts the clips, one at a time, of what's planned first and then what the schedule wants."""
-        tried, pruned = {}, time.time()
-        while True:
-            wait = CLIP_IDLE_SECONDS
-            try:
-                wanted = self.clips_wanted()
-                if self.cut_a_clip(wanted, tried):
-                    wait = CLIP_GAP_SECONDS
-                if time.time() - pruned > CLIP_PRUNE_SECONDS:
-                    pruned = time.time()
-                    posters.prune_clips({posters.clip_file(src) for src in wanted})
-            except Exception:
-                logger.exception("Clip cutting failed")
-            time.sleep(wait)
+    def clip_step(self):
+        """One run of the clip job: cuts the next clip that's wanted, of what's planned first, then what the schedule
+        wants. Seconds until the next run."""
+        wanted = self.clips_wanted()
+        wait = CLIP_GAP_SECONDS if self.cut_a_clip(wanted, self.clips_tried) else CLIP_IDLE_SECONDS
+        if time.time() - self.clips_pruned > CLIP_PRUNE_SECONDS:
+            self.clips_pruned = time.time()
+            posters.prune_clips({posters.clip_file(src) for src in wanted})
+        return wait
 
     def clips_wanted(self):
         planned = [s.src for s in self.lineup.snapshot() if not isinstance(s, MusicBlock)]
@@ -3757,16 +3783,11 @@ class Station:
             return True
         return False
 
-    def watch_art(self):
-        """Background thread: keeps the posters ahead of what's coming up."""
-        while True:
-            try:
-                found = posters.refresh(self.art_wanted())
-                if found:
-                    logger.info(f"Show art: {found} new pictures")
-            except Exception:
-                logger.exception("Show art refresh failed")
-            time.sleep(ART_CHECK_MINUTES * 60)
+    def art_step(self):
+        """One run of the show art job: gets the posters for what's coming up."""
+        found = posters.refresh(self.art_wanted())
+        if found:
+            logger.info(f"Show art: {found} new pictures")
 
     def art_wanted(self):
         """[(title, category, year, needs the large picture)]: the marathons, what's on the schedule, then what's planned."""
@@ -3825,6 +3846,40 @@ class Station:
         logger.info(f"Marathon ad: {name}, {when} at {cards.clock(start)}")
         return events.marathon_ad(image, name, when, cards.clock(start), season)
 
+    def remote_test(self, ask):
+        """Puts something on to see how it looks, from POST /api/test?what=...: scores, promo, launch (with url= and
+        seconds=), alert (with kind=crawl or kind=cutin), or special (with kind= one of SPECIALS, at the next break)."""
+        what, kind = ask.get("what", "").strip().lower(), ask.get("kind", "").strip().lower()
+        if what == "scores":
+            return self.remote_scores_test()
+        if what == "promo":
+            return self.remote_promo_test()
+        if what == "alert":
+            return self.remote_alert_test(kind)
+        if what == "special":
+            return self.remote_special_soon(kind)
+        if what == "launch":
+            try:
+                seconds = int(ask.get("seconds") or 60)
+            except ValueError:
+                return "seconds= has to be a number."
+            return self.remote_launch_test(ask.get("url", ""), seconds)
+        return "What to test? what=scores, promo, launch, alert or special."
+
+    def remote_promo_test(self):
+        """Puts the NEXT / LATER / TONIGHT lower third, pictures and all, over the show on now, to see how it looks."""
+        item = self.player.current()
+        position = self.player.position()
+        if not item or item.kind not in ("act", "detour") or not item.show or isinstance(item.show, MusicBlock) or position is None:
+            return "It needs a show on."
+        script, art = self.promo(item.show, position + 0.8)
+        if not script:
+            return "Nothing is coming up before sign-off."
+        vf, _ = overlay_filter(0, False, promo=script, art=art)
+        if vf:
+            self.player.add_filter("vf", "@promotest:" + vf)
+        return f"Promo is on, with {len(art)} picture{'s' if len(art) != 1 else ''}."
+
     def remote_special_soon(self, kind):
         """Makes a special screen due at the next break, to see it without waiting."""
         if kind not in SPECIALS:
@@ -3834,28 +3889,12 @@ class Station:
 
     # --- Local weather ---
 
-    def watch_weather(self):
-        """Background thread: keeps the saved weather current, whatever is on the air."""
-        watcher = wx.Watcher(WEATHER_LAT, WEATHER_LON, WEATHER_TZ)
-        while True:
-            try:
-                wait = watcher.step()
-            except Exception:
-                logger.exception("Weather refresh failed")
-                wait = wx.RETRY_SECONDS[-1]
-            time.sleep(wait)
-
     # --- Emergency alerts ---
 
-    def watch_alerts(self):
-        """Background thread: polls the NWS and puts cut-ins and crawls on the air."""
-        while True:
-            try:
-                self.alerts.poll()
-                self.check_alerts()
-            except Exception:
-                logger.exception("Alert check failed")
-            time.sleep(ALERT_CHECK_SECONDS)
+    def alert_step(self):
+        """One run of the alert job: polls the NWS and puts cut-ins and crawls on the air."""
+        self.alerts.poll()
+        self.check_alerts()
 
     def check_alerts(self):
         if not self.on_air:
@@ -3880,16 +3919,8 @@ class Station:
             if self.air_crawl(text, label, first):
                 self.alerts.crawled(ids)
 
-    def watch_launches(self):
-        """Background thread: puts live launches on the air."""
-        while True:
-            try:
-                self.check_launches()
-            except Exception:
-                logger.exception("Launch check failed")
-            time.sleep(LAUNCH_CHECK_SECONDS)
-
     def check_launches(self):
+        """One run of the launch job: puts a live launch on the air when it's time."""
         if self.launch_live:
             launch, item, began = self.launch_live
             on_for = time.time() - began
@@ -4030,16 +4061,8 @@ class Station:
 
     # --- Live scores ---
 
-    def watch_scores(self):
-        """Background thread: crawls the live scores across a show every SCORES_MINUTES while games are on."""
-        while True:
-            try:
-                self.check_scores()
-            except Exception:
-                logger.exception("Score check failed")
-            time.sleep(SCORES_CHECK_SECONDS)
-
     def check_scores(self):
+        """One run of the score job: puts the score card over a show every SCORES_MINUTES while games are on."""
         # Fetches only once a show is on that the crawl could go over
         if not self.on_air or self.eas_pending or time.time() < self.scores_next or not self._score_window():
             return
@@ -4178,7 +4201,13 @@ class Station:
         else:
             on_air = "warn", "Not on the air"
         disks = (("sd", "SD card", CACHE_DIR, False), ("usb", "USB drive", USB_DIR, True))
-        return health.report(self.on_air, on_air, MEDIA_ROOT, disks, MIN_FREE_GB, self.cache.bad_files)
+        used = self.player.memory_mb()
+        restarts = self.player.memory_restarts
+        memory = {"id": "player-memory", "name": "Player memory",
+                  "status": "idle" if used is None else "warn" if used > PLAYER_MEMORY_MB else "ok",
+                  "message": "Not running" if used is None else f"{used} MB, restarted at {PLAYER_MEMORY_MB} MB"
+                  + (f" ({restarts} time{'s' if restarts != 1 else ''} since the station started)" if restarts else "")}
+        return health.report(self.on_air, on_air, MEDIA_ROOT, disks, MIN_FREE_GB, self.cache.bad_files, [memory, health.jobs_row()])
 
     def remote_clear_bad_file(self, record_id):
         src = self.cache.clear_bad_file(record_id)
@@ -4300,16 +4329,17 @@ def main():
     player = Player(cache_manager.set_aside)
     station = Station(cache_manager, lineup, player)
     remote.start(station, REMOTE_PORT)
+    # The background jobs, each a heartbeat on the health page
     if LAUNCHES:
-        threading.Thread(target=station.watch_launches, daemon=True).start()
-    threading.Thread(target=station.watch_art, daemon=True).start()
-    threading.Thread(target=station.watch_clips, daemon=True).start()
+        health.repeat("Live launches", station.check_launches, LAUNCH_CHECK_SECONDS)
+    health.repeat("Show art", station.art_step, ART_CHECK_MINUTES * 60)
+    health.repeat("Clips", station.clip_step, CLIP_IDLE_SECONDS)
     if WEATHER_LAT is not None:
-        threading.Thread(target=station.watch_weather, daemon=True).start()
+        health.repeat("Weather", wx.Watcher(WEATHER_LAT, WEATHER_LON, WEATHER_TZ).step, wx.RETRY_SECONDS[-1])
     if station.alerts:
-        threading.Thread(target=station.watch_alerts, daemon=True).start()
+        health.repeat("Emergency alerts", station.alert_step, ALERT_CHECK_SECONDS)
     if station.scores:
-        threading.Thread(target=station.watch_scores, daemon=True).start()
+        health.repeat("Scores", station.check_scores, SCORES_CHECK_SECONDS)
     station.run()
 
 if __name__ == "__main__":

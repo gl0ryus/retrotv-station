@@ -9,9 +9,13 @@ import os
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import TYPE_CHECKING
 
 import retrotv_schedule as schedule
 from retrotv_cards import FONTS_DIR
+
+if TYPE_CHECKING:   # only for the type checker: retro_station imports this module
+    from retro_station import Station
 
 logger = logging.getLogger("RetroTV")
 
@@ -25,7 +29,7 @@ FONT_FILES = ("ArchivoBlack-Regular.ttf", "BarlowCondensed-Bold.ttf", "BarlowCon
 
 
 class Handler(BaseHTTPRequestHandler):
-    station = None
+    station: "Station" = None   # type: ignore[assignment]  # set by start()
     page = b""
     schedule_page = b""
     health_page = b""
@@ -109,22 +113,15 @@ class Handler(BaseHTTPRequestHandler):
                 message = self.station.remote_tune(int(body.get("channel", 0)), str(body.get("id", "")))
             elif url.path == "/api/main":
                 message = self.station.remote_main()
-            elif url.path == "/api/launch_test":
-                query = urllib.parse.parse_qs(url.query)
-                message = self.station.remote_launch_test(query.get("url", [""])[0], int(query.get("seconds", ["60"])[0]))
             elif url.path == "/api/bad_file/clear":
                 message = self.station.remote_clear_bad_file(str(body.get("id", "")))
-            elif url.path == "/api/scores_test":
-                message = self.station.remote_scores_test()
-            elif url.path == "/api/special_soon":
-                kind = urllib.parse.parse_qs(url.query).get("kind", [""])[0] or str(body.get("kind", ""))
-                message = self.station.remote_special_soon(kind)
+            elif url.path == "/api/test":
+                # In the query string as well as a body: Windows shells mangle the quotes in a JSON body typed on the
+                # command line. curl -X POST "http://retrotv.local/api/test?what=scores"
+                ask = {**{k: str(v) for k, v in body.items()}, **{k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}}
+                message = self.station.remote_test(ask)
             elif url.path == "/api/rescan":
                 message = self.station.remote_rescan()
-            elif url.path == "/api/alert_test":
-                # ?kind= too: Windows shells mangle the quotes in a JSON body typed on the command line
-                kind = urllib.parse.parse_qs(url.query).get("kind", [""])[0] or str(body.get("kind", ""))
-                message = self.station.remote_alert_test(kind.strip().lower())
             else:
                 self._send(404, {"error": "not found"})
                 return

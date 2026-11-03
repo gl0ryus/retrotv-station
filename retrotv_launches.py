@@ -10,9 +10,9 @@ import os
 import subprocess
 import time
 import urllib.error
-import urllib.request
 
 import retrotv_health as health
+from retrotv_io import get_json, write_json
 
 logger = logging.getLogger("RetroTV")
 
@@ -70,10 +70,8 @@ def resolve(url):
 
 
 def _get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": "GTV-retro-station"})
     try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return json.load(r)
+        return get_json(url, timeout=20)
     except (OSError, ValueError) as e:   # includes the free tier's 429: the next check tries again
         logger.info(f"Launch data: {e}")
         return None
@@ -91,10 +89,7 @@ class Launches:
             self.tries = {}
 
     def _save(self):
-        tmp = STATE_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(self.tries, f)
-        os.replace(tmp, STATE_FILE)
+        write_json(STATE_FILE, self.tries)
 
     def _lookup(self, launch):
         fresh = _get(f"{API}/{launch['id']}/?mode=detailed")

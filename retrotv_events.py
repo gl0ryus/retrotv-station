@@ -346,6 +346,11 @@ def marathon_ad(image, name, when, start_time, season=None):
 # --- Snipe ---
 
 BAR_RIGHT = 745      # the lower thirds end left of the logo bug in the bottom right corner
+BAR_TOP, BAR_HEIGHT = 462, 62
+BAR_SLANT = 22
+BAR_COLOR = "&H00201810&"
+BAR_RULE = "&H002A7FEE&"    # the line under it
+LABEL_INK = "&H00161110&"   # the words in the mustard label box
 NAME_CHAR = 14.5     # Barlow Condensed ExtraBold caps at 46: about this wide per character, as rendered
 
 
@@ -357,22 +362,28 @@ def _bar(names, tag):
     return width, sizes
 
 
+def lower_third(s, start, end, tag, width, top=BAR_TOP, height=BAR_HEIGHT, bar_alpha="&H30&"):
+    """Draws a lower third's frame from the left edge: a bar `tag` + `width` wide, a mustard label box `tag` wide at its
+    start and a rule under it, all sliding in together. Returns slide(x, y): the same slide, for what goes on it."""
+    shift = tag + width + 80   # from just off the left edge
+
+    def slide(x, y):
+        return f"\\move({x - shift},{y},{x},{y},0,450)"
+    s.shape(start, end, 40, top, cards.slanted_bar(tag + width, height, BAR_SLANT), BAR_COLOR, fade=(0, 300), layer=1,
+            extra=slide(40, top) + f"\\1a{bar_alpha}")
+    s.shape(start, end, 40, top, cards.slanted_bar(tag, height, BAR_SLANT), MUSTARD, fade=(0, 300), layer=2, extra=slide(40, top))
+    s.shape(start, end, 40, top + height + 2, rect(tag + width - BAR_SLANT, 5), BAR_RULE, fade=(0, 300), layer=2,
+            extra=slide(40, top + height + 2))
+    return slide
+
+
 def snipe(name, start, end):
     """An ASS file for the vf chain: a "NEXT" lower third that slides in at file time `start`."""
     s = Script()
     name = clip_text(name.upper(), 30)
     width, (size,) = _bar([name], 150)
-    shift = 150 + width + 80  # everything slides in together from off the left edge
-
-    def slide(x, y):
-        return f"\\move({x - shift},{y},{x},{y},0,450)"
-    s.shape(start, end, 40, 462, cards.slanted_bar(150 + width, 62, 22), "&H00201810&", fade=(0, 300),
-            layer=1, extra=slide(40, 462) + "\\1a&H30&")
-    s.shape(start, end, 40, 462, cards.slanted_bar(150, 62, 22), MUSTARD, fade=(0, 300), layer=2,
-            extra=slide(40, 462))
-    s.shape(start, end, 40, 526, rect(150 + width - 22, 5), "&H002A7FEE&", fade=(0, 300), layer=2,
-            extra=slide(40, 526))
-    s.text(start, end, 62, 494, "NEXT", ARCHIVO, 40, "&H00161110&", align=4, fade=(0, 300), layer=3,
+    slide = lower_third(s, start, end, 150, width)
+    s.text(start, end, 62, 494, "NEXT", ARCHIVO, 40, LABEL_INK, align=4, fade=(0, 300), layer=3,
            extra=slide(62, 494))
     s.text(start, end, 196, 494, name, BARLOW_X, size, CREAM, align=4, fade=(0, 300), layer=3,
            extra=slide(196, 494))
@@ -409,21 +420,12 @@ def promo(panels, start, panel_seconds=4.5):
     end = start + panel_seconds * len(panels)
     tag = max(150, max(int(cards.text_width(label, ARCHIVO, 40)) for label, _ in panels) + 48)
     width, sizes = _bar([name for _, name in panels], tag)
-    shift = tag + width + 80
-
-    def slide(x, y):
-        return f"\\move({x - shift},{y},{x},{y},0,450)"
-    s.shape(start, end, 40, 462, cards.slanted_bar(tag + width, 62, 22), "&H00201810&", fade=(0, 300),
-            layer=1, extra=slide(40, 462) + "\\1a&H30&")
-    s.shape(start, end, 40, 462, cards.slanted_bar(tag, 62, 22), MUSTARD, fade=(0, 300), layer=2,
-            extra=slide(40, 462))
-    s.shape(start, end, 40, 526, rect(tag + width - 22, 5), "&H002A7FEE&", fade=(0, 300), layer=2,
-            extra=slide(40, 526))
+    slide = lower_third(s, start, end, tag, width)
     for i, (label, name) in enumerate(panels):
         a, b = start + i * panel_seconds, start + (i + 1) * panel_seconds
         first, last = i == 0, i == len(panels) - 1
         fade = (0 if first else 200, 300 if last else 150)  # the first panel rides in with the bar
-        s.text(a, b, 62, 494, label, ARCHIVO, 40, "&H00161110&", align=4, fade=fade, layer=3,
+        s.text(a, b, 62, 494, label, ARCHIVO, 40, LABEL_INK, align=4, fade=fade, layer=3,
                extra=slide(62, 494) if first else "")
         s.text(a, b, 46 + tag, 494, name, BARLOW_X, sizes[i], CREAM, align=4, fade=fade, layer=3,
                extra=slide(46 + tag, 494) if first else "")

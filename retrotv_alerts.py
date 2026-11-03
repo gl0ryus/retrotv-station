@@ -22,7 +22,6 @@ import subprocess
 import threading
 import time
 import unicodedata
-import urllib.request
 import wave
 
 import retrotv_cards as cards
@@ -30,7 +29,8 @@ from retrotv_cards import (
     ARCHIVO, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, ORANGE_RULE, W, WHITE, YELLOW, Card, Script,
     clip_text, clock, fit, lavfi_url, music, rect, text_width,
 )
-from retrotv_screens import TEXT_FACTOR, USER_AGENT, wrap
+from retrotv_io import get_json, write_json
+from retrotv_screens import TEXT_FACTOR, wrap
 
 logger = logging.getLogger("RetroTV")
 
@@ -187,9 +187,7 @@ def _parse(feature):
 def fetch(url):
     """The active alerts as GeoJSON, or None when the NWS can't be reached."""
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/geo+json"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return json.load(r)
+        return get_json(url, timeout=15, accept="application/geo+json")
     except Exception as e:
         logger.warning(f"Alert fetch failed: {e}")
         return None
@@ -220,11 +218,8 @@ class Monitor:
     def _save(self):
         cutoff = time.time() - AIRED_DAYS * 86400
         self.aired = {k: t for k, t in self.aired.items() if t > cutoff}
-        tmp = STATE_FILE + ".tmp"
         try:
-            with open(tmp, "w") as f:
-                json.dump({"aired": self.aired, "next_test": self.next_test}, f)
-            os.replace(tmp, STATE_FILE)
+            write_json(STATE_FILE, {"aired": self.aired, "next_test": self.next_test})
         except OSError as e:
             logger.warning(f"Could not save alert state: {e}")
 

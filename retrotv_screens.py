@@ -15,8 +15,8 @@ import threading
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 
+from retrotv_io import USER_AGENT, get_json, write_json  # USER_AGENT: other modules still import it from here
 from retrotv_cards import (weather_as_of, 
     ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, SHADOW_RED, SKY, W, WHITE,
     YELLOW, ASSETS_DIR, CHANNEL, WMO, Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look,
@@ -27,7 +27,6 @@ logger = logging.getLogger("RetroTV")
 
 DATA_DIR = os.path.join(HOME_DIR, "retrotv_data")
 WORLD_MAP = os.path.join(ASSETS_DIR, "world_110m.json")  # Natural Earth 110m land, simplified
-USER_AGENT = "GL0RYUS-RetroTV/1.0 (personal hobby TV station)"
 SPACE_BACKGROUND = "0x060a1e"
 QUIZ_BACKGROUND = "0x1c0a36"
 QUIZ_BAND = "&H00481A30&"
@@ -53,13 +52,8 @@ def fetch_json(name, url, max_age_minutes, stale_hours=24):
     except (OSError, ValueError, KeyError):
         pass
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.load(r)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({"fetched": time.time(), "data": data}, f)
-        os.replace(tmp, path)
+        data = get_json(url, timeout=10)
+        write_json(path, {"fetched": time.time(), "data": data})
         return data
     except Exception as e:
         logger.warning(f"Fetch failed for {name}: {e}")
@@ -205,21 +199,12 @@ QUIZ_BANK_DAYS = 30  # re-download this often to pick up questions Open Trivia D
 _bank_thread = None
 
 
-def _write_json(path, data):
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f)
-    os.replace(tmp, path)
-
-
 def _opentdb(url):
     """One Open Trivia DB call, paced for its limit of one request per 5 seconds."""
     for attempt in range(5):
         time.sleep(5.5 + 10 * attempt)
-        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
-            with urllib.request.urlopen(req, timeout=20) as r:
-                data = json.load(r)
+            data = get_json(url, timeout=20)
         except urllib.error.HTTPError as e:  # it answers too-fast calls with a 429
             if e.code != 429:
                 raise
@@ -251,7 +236,7 @@ def build_quiz_bank():
                 if q["difficulty"] != "hard":
                     bank[q["key"]] = q
     keys = random.sample(list(bank), min(len(bank), QUIZ_BANK_SIZE))
-    _write_json(QUIZ_BANK, {"built": time.time(), "questions": [bank[k] for k in keys]})
+    write_json(QUIZ_BANK, {"built": time.time(), "questions": [bank[k] for k in keys]})
     logger.info(f"Quiz: question bank rebuilt with {len(keys)} questions")
 
 
@@ -318,7 +303,7 @@ def _next_question(topic=None):
             logger.info(f"Quiz: dealing a fresh deck of {len(deck)} questions")
         q = bank[deck.pop()]
         state["deck"] = deck
-    _write_json(QUIZ_FILE, state)
+    write_json(QUIZ_FILE, state)
     return q
 
 
@@ -1154,9 +1139,7 @@ def _iss_positions(at):
         url = ("https://api.wheretheiss.at/v1/satellites/25544/positions?units=miles&timestamps="
                + ",".join(str(t) for t in chunk))
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                points += json.load(r)
+            points += get_json(url, timeout=10)
         except Exception as e:
             logger.warning(f"ISS position fetch failed: {e}")
             return None, []

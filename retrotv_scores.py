@@ -4,29 +4,26 @@ logos, the home teams' games first and in mustard. The scores come from ESPN's p
 and are fetched only when the card is about to air, so they're never more than a couple of minutes old. Logos are
 downloaded once and kept. Standard library, plus ffmpeg to size the logos.
 """
-import json
 import logging
 import os
 import re
 import subprocess
 import time
-import urllib.request
 
-from retrotv_alerts import LABEL_TEXT, UNDERLINE
+from retrotv_alerts import LABEL_TEXT
 from retrotv_art import download_image
-from retrotv_cards import ARCHIVO, BARLOW_X, CREAM, FONTS_DIR, H, MUSTARD, Script, W, rect, rounded, slanted_bar
+from retrotv_cards import ARCHIVO, BARLOW_X, CREAM, FONTS_DIR, H, MUSTARD, Script, W, rounded
 from retrotv_cards import fit as cards_fit
-from retrotv_events import BAR_RIGHT
-from retrotv_screens import DATA_DIR, USER_AGENT
+from retrotv_events import BAR_RIGHT, BAR_SLANT, lower_third
+from retrotv_io import get_json
+from retrotv_screens import DATA_DIR
 
 logger = logging.getLogger("RetroTV")
 
 SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
 SPORTS = {"nfl": "football", "nba": "basketball", "nhl": "hockey", "mlb": "baseball"}
 FRESH_SECONDS = 120         # scores older than this are fetched again before a card
-BAR_COLOR = "&H00201810&"   # the NEXT / LATER lower thirds' bar
 TOP, HEIGHT = 414, 110      # the same bottom edge as those lower thirds, about twice as tall
-SLANT = 22
 TAG_WIDTH = 176             # the mustard box with the league and the game's clock
 FIRST_TEAM_X, TEAM_WIDTH = 214, 256
 CHIP = 86                   # the cream plate behind a logo: ESPN's are drawn for a light background
@@ -70,10 +67,7 @@ class Scoreboard:
 
     def _fetch(self, league, team, states=("in",)):
         try:
-            req = urllib.request.Request(SCOREBOARD_URL.format(sport=SPORTS[league], league=league),
-                                         headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                data = json.load(r)
+            data = get_json(SCOREBOARD_URL.format(sport=SPORTS[league], league=league), timeout=10)
         except Exception as e:
             if league not in self.failing:
                 logger.warning(f"Scores: could not fetch the {league.upper()} scoreboard ({e})")
@@ -165,19 +159,11 @@ def board_filter(games, start, logos):
         [ 3RD 12:04  ]  (logo)  TB       (logo)  BOS
 
     Pictures can't go in an ASS script, so the logos are laid over it, each only during its game."""
-    shift = BAR_RIGHT + 40   # everything slides in together from off the left edge
     bar_end = start + LEAD + len(games) * PAGE_SECONDS + 0.3
-
-    def slide(x, y):
-        return f"\\move({x - shift},{y},{x},{y},0,450)"
     s = Script()
-    s.shape(start, bar_end, 40, TOP, slanted_bar(BAR_RIGHT - 40, HEIGHT, SLANT), BAR_COLOR, fade=(0, 300), layer=1,
-            extra=slide(40, TOP) + "\\1a&H20&")
-    s.shape(start, bar_end, 40, TOP, slanted_bar(TAG_WIDTH, HEIGHT, SLANT), MUSTARD, fade=(0, 300), layer=2, extra=slide(40, TOP))
-    s.shape(start, bar_end, 40, TOP + HEIGHT + 2, rect(BAR_RIGHT - 40 - SLANT, 5), UNDERLINE, fade=(0, 300), layer=2,
-            extra=slide(40, TOP + HEIGHT + 2))
+    lower_third(s, start, bar_end, TAG_WIDTH, BAR_RIGHT - 40 - TAG_WIDTH, top=TOP, height=HEIGHT, bar_alpha="&H20&")
     sources, stages, label = [], [], "base"
-    room = (TAG_WIDTH - SLANT - 22) * 1.45    # fit's estimates run wide
+    room = (TAG_WIDTH - BAR_SLANT - 22) * 1.45    # fit's estimates run wide
     for i, g in enumerate(games):
         a = start + LEAD + i * PAGE_SECONDS
         b = a + PAGE_SECONDS

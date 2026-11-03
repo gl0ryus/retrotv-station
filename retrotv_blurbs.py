@@ -19,11 +19,11 @@ import logging
 import os
 import random
 import re
-import urllib.request
 
 import retrotv_health as health
 from retrotv_cards import BARLOW_S, CHANNEL, WHITE, Card, Script, esc, lavfi_url, music
-from retrotv_screens import DATA_DIR, USER_AGENT, wrap
+from retrotv_io import get_json, write_json
+from retrotv_screens import DATA_DIR, wrap
 
 logger = logging.getLogger("RetroTV")
 
@@ -66,9 +66,7 @@ NOT_CLEAN = re.compile(r"\b(?:sex\w*|naked|nude|penis\w*|vagina\w*|breasts?|boob
 # --- Where the words come from ---
 
 def _get(url):
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=6) as r:
-        return json.load(r)
+    return get_json(url, timeout=6)
 
 
 def _tidy(text):
@@ -244,11 +242,7 @@ def _seen():
 
 
 def _remember(seen):
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp = SEEN_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump({"seen": seen[-SEEN_KEEP:]}, f)
-    os.replace(tmp, SEEN_FILE)
+    write_json(SEEN_FILE, {"seen": seen[-SEEN_KEEP:]})
 
 
 # --- On screen ---

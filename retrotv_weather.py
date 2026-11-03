@@ -8,16 +8,14 @@ import datetime
 import json
 import logging
 import math
-import os
 import re
 import time
 import urllib.parse
-import urllib.request
 import zoneinfo
 
 import retrotv_health as health
 from retrotv_cards import WEATHER_FILE
-from retrotv_screens import USER_AGENT
+from retrotv_io import get_json, write_json
 
 logger = logging.getLogger("RetroTV")
 
@@ -85,20 +83,12 @@ def _saved_as_of():
 
 
 def _save(data):
-    tmp = WEATHER_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f)
-    os.replace(tmp, WEATHER_FILE)
+    write_json(WEATHER_FILE, data)
 
 
 def _get(url, check=None):
     """JSON from a URL. check runs while the request is open, so a reply it refuses is recorded as that service failing."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/geo+json, application/json"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
-        data = json.load(r)
-        if check:
-            check(data)
-    return data
+    return get_json(url, timeout=TIMEOUT, accept="application/geo+json, application/json", check=check)
 
 
 # --- Open-Meteo ---
