@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>G|TV Watch</title>
+<link rel="stylesheet" href="/common.css">
+<style>
+/* The station live (served by retrotv/remote.py from retrotv/live.py's stream): one long MP4, fed to the player
+   through Media Source by the script below. No player library. The bar fades out while the picture plays and comes
+   back on any touch or move. */
+html, body { margin: 0; height: 100%; background: #000; }
+body { color: var(--cream); font: 600 19px/1.3 "Barlow Condensed", sans-serif; overflow: hidden; }
+video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+       padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+       background: linear-gradient(transparent, rgba(22, 17, 13, .92) 45%); transition: opacity .4s; }
+.bar.hide { opacity: 0; pointer-events: none; }
+.logo { font-family: "Archivo Black"; font-size: 26px; transform: skewX(-9deg); line-height: 1; }
+#status { flex: 1; min-width: 140px; color: var(--sky); }
+#status.live { color: var(--mustard); }
+button { font: 700 18px "Barlow Condensed", sans-serif; letter-spacing: .5px; color: var(--ink); background: var(--mustard);
+         border: 0; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+button.quiet { color: var(--cream); background: var(--panel); border: 1px solid var(--edge); }
+a { color: var(--sky); }
+</style>
+</head>
+<body>
+<video id="tv" autoplay muted playsinline></video>
+<div class="bar" id="bar">
+  <span class="logo">G|TV</span>
+  <span id="status">Tuning in…</span>
+  <button id="sound" type="button">Sound on</button>
+  <button id="full" class="quiet" type="button">Full screen</button>
+  <a href="/">Remote</a>
+</div>
+<script>
+const tv = document.getElementById("tv"), bar = document.getElementById("bar"), note = document.getElementById("status");
+const sound = document.getElementById("sound"), full = document.getElementById("full");
+const BEHIND = 1.5;   // seconds the picture plays behind the newest it has: the stream comes a second at a time
+let retry = null, lastTime = -1, stuckSince = 0, hideTimer = null, misses = 0, session = 0, reader = null, url = null;
+// Fed through Media Source (MSE) where the browser has it: Firefox, left to play the endless MP4 download by itself,
+// shows only a few frames a second. Chrome plays either way. The plain download is the fallback
+let useMSE = "MediaSource" in window;
+
+function say(text, live) { note.textContent = text; note.className = live ? "live" : ""; }
+
+function tune() {
+  clearTimeout(retry);
+  retry = null;
+  say("Tuning in…");
+  lastTime = -1;
+  stuckSince = 0;
+  const me = ++session;
+  if (url) URL.revokeObjectURL(url);
+  url = null;
+  if (useMSE) {
+    feed(me).catch(() => { if (me === session) lost(); });
+  } else {
+    tv.src = "/live.mp4?" + Date.now();   // one long response; a fresh one picks up the stream as it is now
+    tv.play().catch(() => {});
+  }
+}
+
+function lost() {
+  if (retry) return;
+  session++;   // stops the feed that was running
+  if (reader) { reader.cancel().catch(() => {}); reader = null; }
+  misses += 1;
+  if (misses > 3) {   // not a blip: say so, and try less often
+    note.innerHTML = 'No signal. The <a href="/health">health page</a> may say why. Trying again…';
+    retry = setTimeout(tune, 15000);
+  } else {
+    say("Lost the signal. Tuning in again…");
+    retry = setTimeout(tune, 3000);
+  }
+}
+
+function join(parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.length; }
+  return out;
+}
+function find(d, text) {   // where a four-letter box type first appears
+  outer: for (let i = 0; i + 4 <= d.length; i++) {
+    for (let j = 0; j < 4; j++) if (d[i + j] !== text.charCodeAt(j)) continue outer;
+    return i;
+  }
+  return -1;
+}
+const u32 = (d, i) => ((d[i] << 24) | (d[i + 1] << 16) | (d[i + 2] << 8) | d[i + 3]) >>> 0;
+const hex = n => n.toString(16).padStart(2, "0");
+
+async function feed(me) {
+  const ms = new MediaSource();
+  url = tv.src = URL.createObjectURL(ms);
+  await new Promise(r => ms.addEventListener("sourceopen", r, { once: true }));
+  const resp = await fetch("/live.mp4?" + Date.now(), { cache: "no-store" });
+  if (!resp.ok || !resp.body || me !== session) throw new Error("no stream");
+  reader = resp.body.getReader();
+  let head = [], sb = null, queued = [];
+  const pump = () => {
+    if (!sb || sb.updating || me !== session) return;
+    const b = tv.buffered;
+    if (b.length && tv.currentTime - b.start(0) > 30) { sb.remove(b.start(0), tv.currentTime - 10); return; }   // keep memory small
+    if (!queued.length) return;
+    const data = join(queued);
+    queued = [];
+    try {
+      sb.appendBuffer(data);
+    } catch (e) {
+      if (e.name !== "QuotaExceededError") throw e;
+      queued.unshift(data);   // full: the next remove makes room
+    }
+  };
+  while (me === session) {
+    const { value, done } = await reader.read();
+    if (done || me !== session) break;
+    if (sb) {
+      queued.push(value);
+    } else {
+      head.push(value);
+      const all = join(head), moov = find(all, "moov");
+      if (moov < 4 || all.length < moov - 4 + u32(all, moov - 4)) continue;   // the whole header first
+      const avc = find(all, "avcC");   // the picture's profile and level, for the codec string
+      const type = avc < 0 ? "" : `video/mp4; codecs="avc1.${hex(all[avc + 5])}${hex(all[avc + 6])}${hex(all[avc + 7])},mp4a.40.2"`;
+      if (!type || !MediaSource.isTypeSupported(type)) { useMSE = false; reader.cancel().catch(() => {}); tune(); return; }
+      sb = ms.addSourceBuffer(type);
+      sb.addEventListener("updateend", () => { catchUp(); pump(); });
+      queued.push(all);
+    }
+    pump();
+  }
+  if (me === session) lost();   // the stream ended
+}
+
+function catchUp() {
+  // Start, or catch up after falling well behind (a tab left in the background), BEHIND seconds from the newest
+  const b = tv.buffered;
+  if (!b.length) return;
+  const end = b.end(b.length - 1), start = b.start(b.length - 1);
+  if (end - start < BEHIND) return;   // not enough yet
+  if (tv.currentTime < start || end - tv.currentTime > BEHIND + 3) tv.currentTime = end - BEHIND;
+  if (tv.paused) tv.play().catch(() => {});
+}
+
+tv.addEventListener("playing", () => { misses = 0; say("Live", true); });
+tv.addEventListener("error", () => lost());
+tv.addEventListener("ended", () => lost());
+
+setInterval(() => {
+  // The plain download: catch up only when well behind, keeping a couple of seconds in hand
+  const b = tv.buffered;
+  if (!useMSE && b.length && b.end(b.length - 1) - tv.currentTime > 8) tv.currentTime = b.end(b.length - 1) - 2;
+  // A stream that stops moving without an error (the station restarting, say): start over
+  if (tv.paused || retry) return;
+  if (tv.currentTime !== lastTime) { lastTime = tv.currentTime; stuckSince = 0; return; }
+  if (!stuckSince) stuckSince = Date.now();
+  else if (Date.now() - stuckSince > 10000) { tv.removeAttribute("src"); tv.load(); lost(); }
+}, 2000);
+
+function setSound(on) {
+  tv.muted = !on;
+  sound.textContent = on ? "Sound off" : "Sound on";
+  sound.className = on ? "quiet" : "";
+  tv.play().catch(() => {});
+}
+sound.addEventListener("click", () => setSound(tv.muted));
+
+function toggleFull() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else (document.documentElement.requestFullscreen || (() => Promise.reject()))
+    .call(document.documentElement).catch(() => tv.webkitEnterFullscreen && tv.webkitEnterFullscreen());
+}
+full.addEventListener("click", toggleFull);
+tv.addEventListener("dblclick", toggleFull);
+document.addEventListener("fullscreenchange", () => { full.textContent = document.fullscreenElement ? "Exit full screen" : "Full screen"; });
+
+document.addEventListener("keydown", e => {
+  if (e.key === "m") setSound(tv.muted);
+  if (e.key === "f") toggleFull();
+});
+
+function wake() {
+  bar.classList.remove("hide");
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => { if (!tv.paused && note.className === "live") bar.classList.add("hide"); }, 3500);
+}
+["mousemove", "touchstart", "keydown"].forEach(e => document.addEventListener(e, wake, { passive: true }));
+
+tune();
+wake();
+</script>
+</body>
+</html>

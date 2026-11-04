@@ -9,6 +9,7 @@ TMP = tempfile.mkdtemp(prefix="player_test")
 rs.MPV_SOCKET = TMP + "/mpv.sock"
 rs.PLAYER_CMD = ["mpv", "--no-config", "--idle=yes", "--vo=null", "--ao=null", "--really-quiet", f"--input-ipc-server={rs.MPV_SOCKET}"]
 rs.REMOTE_STATE_FILE = TMP + "/remote.json"
+rs.AUDIO_TAP_FILE = TMP + "/audio_tap.py"   # the station's own copy is the live one
 rs.PLAYER_MEMORY_CHECK_SECONDS = 0
 checks = 0
 

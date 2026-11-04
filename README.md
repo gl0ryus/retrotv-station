@@ -12,11 +12,31 @@ The code lives on the NAS (`/mnt/tower/.retrotv/station`, `T:\.retrotv\station` 
 |---|---|
 | The station | `retrotv.service` runs `retro_station.py`, a two-line launcher for `retrotv.station`. `sudo systemctl restart retrotv` after a change. |
 | The writing job | `retrotv-news.timer` runs `retrotv_news.py` (for `retrotv.news`) every two hours in `~/retrotv_venv`: headline quips, show riffs, the sky, the art, Pop-Up Video facts. |
-| The phone remote | http://retrotv.local/ (guide), `/schedule` (the weekly schedule), `/health` (everything the station depends on). |
+| The phone remote | http://retrotv.local/ (guide), `/schedule` (the weekly schedule), `/health` (everything the station depends on), `/watch` (the station live, below). |
 | Trying a screen | `curl -X POST "http://retrotv.local/api/test?what=promo"`, where `what` is `scores`, `promo`, `launch`, `alert` or `special` (`special&kind=marathon` and the like air at the next break). |
 
 `location.json` (the place and coordinates for the weather and alerts) sits next to `retro_station.py` and is kept out
 of git. Keys live on the Pi in `~/.config/retrotv/`.
+
+### The watch page
+
+http://retrotv.local/watch plays the station in a browser as the panel shows it, CRT look and all, with its sound,
+about a second and a half behind. The page feeds the stream to the player through Media Source (Firefox drops most
+frames playing it as a plain download); tested in Firefox and Chrome, and an iPhone, which has no Media Source, can't
+play it. It's made only while someone watches, for about 40% of one CPU core (`retrotv/live.py`; the sound reaches it
+through `retrotv/audio_tap.py`), and only while mpv is drawing: opening the display while nobody holds it would take
+it from mpv.
+
+Reading the screen needs a copy of ffmpeg allowed to, once (and again after a major OS upgrade):
+
+```
+sudo install -d /usr/local/lib/retrotv
+sudo install -o root -g gl0ryus -m 0750 /usr/bin/ffmpeg /usr/local/lib/retrotv/ffmpeg
+sudo setcap cap_sys_admin=ep /usr/local/lib/retrotv/ffmpeg
+```
+
+Only that copy gets the right (`CAP_SYS_ADMIN`, which kmsgrab needs to read the panel's frame buffer), and only
+`gl0ryus` can run it. `LIVE_STREAM = False` in `config.py` turns the page and the sound tap off.
 
 ## The code
 
@@ -39,6 +59,7 @@ Everything is in the `retrotv` package. The arrows show which modules each one b
 | `health` | The `/health` page's data: every network call is watched, the background jobs report in, bad video files go to `_for_review` |
 | `jsonio` | The User-Agent, fetching JSON and saving it safely |
 | `remote` | The phone remote's web server; its pages are in `retrotv/web/` |
+| `live`, `audio_tap` | The watch page's stream: the screen and the player's sound, encoded while someone watches |
 | `news` | The writing job (Claude, Wikipedia, the sky) |
 
 ```

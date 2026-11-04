@@ -14,8 +14,8 @@ import sys
 import time
 
 TESTS = os.path.dirname(os.path.abspath(__file__))
-SUITES = ["health_test", "weather_test", "scores_test", "art_test", "player_test", "launch_timing", "music_join_test",
-          "remote_test", "remote_test3"]
+SUITES = ["health_test", "weather_test", "scores_test", "art_test", "player_test", "live_test", "launch_timing",
+          "music_join_test", "remote_test", "remote_test3"]
 SIM_DAY = ["2026,11,6,9,0", "24", "7"]   # a Friday from sign-on: shows, the marathon and late night
 
 

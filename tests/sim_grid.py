@@ -71,6 +71,7 @@ if os.environ.get("FROZEN"):   # the same inputs as another run, to compare them
     harness.redirect(os.path.join(harness.HOME, "retrotv_data"), data)
 rs.MANIFEST_FILE, rs.SERIES_FILE, rs.REMOTE_STATE_FILE = SIM + "/manifest.json", SIM + "/series.json", SIM + "/remote.json"
 rs.AIRED_FILE, rs.TURNS_FILE = SIM + "/grid_aired.json", SIM + "/turns.json"
+rs.LIVE_STREAM = False   # no watch page: SimPlayer has no screen to stream
 if len(sys.argv) > 4:   # an alternative schedule to try
     schedule.SCHEDULE_FILE = sys.argv[4]
 rs.Lineup._prep_worker = lambda self: None

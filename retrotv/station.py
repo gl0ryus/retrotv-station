@@ -17,6 +17,7 @@ from retrotv import remote
 from retrotv import schedule
 from retrotv import launches
 from retrotv import health
+from retrotv import live
 from retrotv import weather as wx
 from retrotv import art as posters
 from retrotv import alerts
@@ -29,9 +30,9 @@ from retrotv.config import (
     ART_CHECK_MINUTES, BUMPER_FILE, CACHE_DIR, CLIP_GAP_SECONDS, CLIP_IDLE_SECONDS, CLIP_PRUNE_SECONDS,
     CLIP_RETRY_SECONDS, CRAWL_KINDS, ERA_WEIGHT, ERA_YEARS, FILLER_MAX_SECONDS, FRESH_SPECIALS, GLITCH_MINUTES,
     HOLIDAY_WEIGHT, INTRO_SECONDS, KIDS_END_HOUR, LATE_NIGHT_HOUR, LAUNCHES, LAUNCH_BEFORE_SECONDS,
-    LAUNCH_CHECK_SECONDS, LAUNCH_QUEUE_NEXT_SECONDS, LAUNCH_START_GRACE_SECONDS, LAUNCH_WATCH_SECONDS, LOTTERY_HOUR,
-    MAIN_CATEGORIES, MAIN_CHANNEL, MARATHON_SERIES, MEDIA_ROOT, MIN_END_BREAK_SECONDS, MIN_FREE_GB, MUSIC_TITLE_AT,
-    MUSIC_TITLE_SECONDS, OFF_AIR_FILE, OFF_AIR_LOOP_MINUTES, OFF_AIR_SECONDS, PLAYER_MEMORY_MB, POPUP_VIDEO,
+    LAUNCH_CHECK_SECONDS, LAUNCH_QUEUE_NEXT_SECONDS, LAUNCH_START_GRACE_SECONDS, LAUNCH_WATCH_SECONDS, LIVE_STREAM,
+    LOTTERY_HOUR, MAIN_CATEGORIES, MAIN_CHANNEL, MARATHON_SERIES, MEDIA_ROOT, MIN_END_BREAK_SECONDS, MIN_FREE_GB,
+    MUSIC_TITLE_AT, MUSIC_TITLE_SECONDS, OFF_AIR_FILE, OFF_AIR_LOOP_MINUTES, OFF_AIR_SECONDS, PLAYER_MEMORY_MB, POPUP_VIDEO,
     PROMO_AT, PROMO_PANEL_SECONDS, REMOTE_PORT, SCORES, SCORES_CHECK_SECONDS, SCORES_IDLE_MINUTES,
     SCORES_MAX_SECONDS, SCORES_MINUTES, SCORES_TEAMS, SHOW_TITLE_SECONDS, SIGN_ON_HOUR, SLOT_MINUTES, SNIPE_SECONDS,
     SPECIALS, SPECIAL_GAP_MINUTES, STATIC_FILE, STATIC_SECONDS, STRETCH, TONIGHT_HOUR, UP_NEXT_SECONDS, USB_DIR,
@@ -49,6 +50,10 @@ class Station:
     """Decides what airs next and hands it to the player, slightly ahead of time."""
     def __init__(self, cache, lineup, player):
         self.cache, self.lineup, self.player = cache, lineup, player
+        self.live = None   # the watch page's stream, made only while someone watches, and only while mpv is drawing
+        if LIVE_STREAM:
+            self.live = live.Live(ready=player.showing)
+            player.before_start = self.live.stop
         self.prev_kind = None
         self.last_id_hour = None
         self.good_morning = False
@@ -1286,7 +1291,22 @@ class Station:
                   "status": "idle" if used is None else "warn" if used > PLAYER_MEMORY_MB else "ok",
                   "message": "Not running" if used is None else f"{used} MB, restarted at {PLAYER_MEMORY_MB} MB"
                   + (f" ({restarts} time{'s' if restarts != 1 else ''} since the station started)" if restarts else "")}
-        return health.report(self.on_air, on_air, MEDIA_ROOT, disks, MIN_FREE_GB, self.cache.bad_files, [memory, health.jobs_row()])
+        rows = [memory, health.jobs_row()]
+        if self.live:
+            rows.insert(1, self._watch_row(now, self.live))
+        return health.report(self.on_air, on_air, MEDIA_ROOT, disks, MIN_FREE_GB, self.cache.bad_files, rows)
+
+    @staticmethod
+    def _watch_row(now, stream):
+        s = stream.status()
+        if s["running"]:
+            minutes = int((now.timestamp() - s["since"]) // 60)
+            message = f"Streaming for {minutes} min, {s['viewers']} watching"
+        else:
+            message = "Nobody watching"
+        if s["error"]:
+            message += f". Last complaint: {s['error']}"
+        return {"id": "watch-page", "name": "Watch page", "status": "ok" if s["running"] else "idle", "message": message}
 
     def remote_clear_bad_file(self, record_id):
         src = self.cache.clear_bad_file(record_id)

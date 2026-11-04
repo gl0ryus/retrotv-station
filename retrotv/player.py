@@ -11,8 +11,44 @@ import time
 
 from retrotv.jsonio import write_json
 from retrotv.config import (
-    PLAYER_ENV,
-    MPV_SOCKET, PLAYER_CMD, PLAYER_MEMORY_CHECK_SECONDS, PLAYER_MEMORY_MB, REMOTE_STATE_FILE, logger)
+    AUDIO_TAP_FILE, LIVE_AUDIO_DEVICE, LIVE_AUDIO_PORT, LIVE_AUDIO_RATE, LIVE_STREAM, MPV_SOCKET, PLAYER_CMD, PLAYER_ENV,
+    PLAYER_MEMORY_CHECK_SECONDS, PLAYER_MEMORY_MB, REMOTE_STATE_FILE, logger)
+
+TAP_CHECK_SECONDS = 60
+DISPLAY_CHECK_SECONDS = 30
+
+try:   # read once, at startup, so restarting mpv never waits for the NAS to wake
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio_tap.py"), "rb") as _f:
+        TAP_CODE = _f.read()
+except OSError:
+    TAP_CODE = None
+
+
+def audio_args():
+    """mpv's sound. With the watch page on: the panel's speakers through ALSA's tee, which pipes a copy to
+    retrotv/audio_tap.py for the stream, in a fixed shape (16-bit stereo at LIVE_AUDIO_RATE). The tap runs from a copy
+    on the SD card (AUDIO_TAP_FILE). If that can't be set up, the speakers only: the panel's sound never depends on it."""
+    if not LIVE_STREAM:
+        return []
+    try:
+        if TAP_CODE is None:
+            raise OSError("audio_tap.py wasn't readable at startup")
+        try:
+            with open(AUDIO_TAP_FILE, "rb") as f:
+                current = f.read()
+        except FileNotFoundError:
+            current = None
+        if current != TAP_CODE:
+            os.makedirs(os.path.dirname(AUDIO_TAP_FILE), exist_ok=True)
+            with open(AUDIO_TAP_FILE + ".tmp", "wb") as f:
+                f.write(TAP_CODE)
+            os.replace(AUDIO_TAP_FILE + ".tmp", AUDIO_TAP_FILE)
+    except OSError as e:
+        logger.error(f"The watch page will have no sound: can't set up the audio tap ({e}).")
+        return []
+    tap = f"|exec /usr/bin/python3 -I -S {AUDIO_TAP_FILE} {LIVE_AUDIO_PORT} 4"   # 4: bytes per stereo 16-bit frame
+    return [f"--audio-device=alsa/tee:SLAVE='{LIVE_AUDIO_DEVICE}',FILE='{tap}',FORMAT=raw",
+            "--audio-format=s16", f"--audio-samplerate={LIVE_AUDIO_RATE}", "--audio-channels=stereo"]
 
 
 class Item:
@@ -49,6 +85,13 @@ class Player:
         self.alive = False
         self.memory_checked = 0.0
         self.memory_restarts = 0
+        self.tapped = []           # audio_args() mpv was started with
+        self.tap_checked = 0.0
+        self.started_at = 0.0      # when this mpv started
+        self.display_checked = 0.0
+        # Called before each mpv start: the watch page's capture must let go of the screen first. Whoever opens the
+        # display while nobody holds it becomes its owner, and mpv can't draw without being the owner
+        self.before_start = None
         self.volume, self.muted = 100, False
         try:
             with open(REMOTE_STATE_FILE) as f:
@@ -65,7 +108,14 @@ class Player:
             os.remove(MPV_SOCKET)
         except FileNotFoundError:
             pass
-        self.proc = subprocess.Popen(PLAYER_CMD + [f"--volume={self.volume}", f"--mute={'yes' if self.muted else 'no'}"],
+        if self.before_start:
+            try:
+                self.before_start()
+            except Exception as e:
+                logger.error(f"Before starting the player: {e}")
+        self.tapped = audio_args()
+        self.started_at = time.time()
+        self.proc = subprocess.Popen(PLAYER_CMD + self.tapped + [f"--volume={self.volume}", f"--mute={'yes' if self.muted else 'no'}"],
                                      env={**os.environ, **PLAYER_ENV})
         for _ in range(100):
             try:
@@ -184,6 +234,44 @@ class Player:
         self._start()
         return True
 
+    def _check_tap(self):
+        """If the audio tap has died, every sound mpv writes fails ("Input/output error") and the panel goes quiet or
+        stutters, so mpv reopens its sound, which starts a new tap. Checked between items, once a minute at most."""
+        if not self.tapped or time.time() - self.tap_checked < TAP_CHECK_SECONDS or not self.proc:
+            return
+        self.tap_checked = time.time()
+        if self._command(["get_property", "current-ao"]).get("data") != "alsa":
+            return   # no sound open at the moment (or not through ALSA, as in the tests), so no tap expected
+        found = subprocess.run(["pgrep", "-P", str(self.proc.pid), "-f", "audio_tap"], capture_output=True)
+        if found.returncode == 1:
+            logger.error("The watch page's audio tap stopped, reopening the player's sound.")
+            self._command(["ao-reload"])
+
+    def showing(self):
+        """True when mpv is up and drawing on the panel (it holds the display and its video output is set up)."""
+        if not self.alive:
+            return False
+        try:
+            return self._command(["get_property", "vo-configured"]).get("data") is True
+        except (OSError, RuntimeError):
+            return False
+
+    def _check_display(self):
+        """A black panel: mpv decoding video but with no video output, because something else held the display when
+        it started. Checked between items, twice a few seconds apart; then mpv starts afresh."""
+        if time.time() - self.display_checked < DISPLAY_CHECK_SECONDS or time.time() - self.started_at < 15:
+            return
+        self.display_checked = time.time()
+        for attempt in range(2):
+            if self._command(["get_property", "video-params"]).get("error") != "success":
+                return   # no video being decoded at the moment
+            if self.showing():
+                return
+            if attempt == 0:
+                time.sleep(3)
+        logger.error("The panel shows no picture (mpv has no video output), restarting the player.")
+        self._restart()
+
     def play(self, item, epoch=None):
         """Queues an item; blocks while mpv already has one playing and one waiting. Returns False, dropping
         the item, if a flush() has happened since `epoch` (default: since the call)."""
@@ -202,6 +290,11 @@ class Player:
             return False
         if not self.alive or (self.proc and self.proc.poll() is not None):
             self._restart()
+        try:
+            self._check_tap()
+            self._check_display()
+        except (OSError, RuntimeError) as e:
+            logger.error(f"Couldn't check the player's sound or picture: {e}")
         options = {k: str(v) for k, v in item.options.items()}
         try:
             reply = self._command({"name": "loadfile", "url": item.url, "flags": "append-play", "index": -1,

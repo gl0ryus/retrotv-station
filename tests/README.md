@@ -14,6 +14,8 @@ Simulations work on copies, and `harness.guard` stops them deleting cache files.
 | `scores_test.py` | The score card and team logos |
 | `art_test.py` | Show posters, clips, and the marathon ad |
 | `player_test.py` | The player's memory safety net, against a real mpv |
+| `live_test.py` | The watch page's stream (shared, joinable, stopped when nobody watches) and the audio tap, with a test pattern for the screen |
+| `watch_browser_test.py` | The watch page playing in headless Firefox (on the PC) |
 | `launch_timing.py` | When a live launch cuts in, without the network |
 | `music_join_test.py` | Rejoining a music block partway through |
 | `remote_test.py`, `remote_test3.py` | The phone remote against a simulated station |

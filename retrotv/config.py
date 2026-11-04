@@ -357,6 +357,23 @@ ANNIVERSARY_HOUR = 20
 REMOTE_PORT = 80
 REMOTE_STATE_FILE = os.path.join(HOME_DIR, "retrotv_remote.json")
 
+# The watch page, http://retrotv.local/watch: the station as its own screen shows it, CRT look and all, with its
+# sound, in a browser on the home network (retrotv/live.py). It's only made while someone watches.
+LIVE_STREAM = True
+LIVE_CAPTURE_FFMPEG = "/usr/local/lib/retrotv/ffmpeg"   # the copy of ffmpeg that may read the screen (README)
+LIVE_DRM_DEVICE = "/dev/dri/by-path/platform-gpu-card"   # the panel's display (mpv.conf's drm-device)
+# The player's sound goes to the panel through ALSA's tee, which pipes a copy to retrotv/audio_tap.py (run from
+# AUDIO_TAP_FILE, on the SD card), which sends it to this UDP port on the Pi. Always 16-bit stereo at LIVE_AUDIO_RATE
+LIVE_AUDIO_DEVICE = "hdmi:CARD=vc4hdmi1,DEV=0"           # the panel's speakers (mpv.conf's audio-device)
+LIVE_AUDIO_PORT = 5004
+LIVE_AUDIO_RATE = 48000
+AUDIO_TAP_FILE = os.path.join(HOME_DIR, ".cache", "retrotv", "audio_tap.py")
+LIVE_AUDIO_SHIFT_MS = -60  # moves the stream's sound against its picture: a flash-and-beep clip had it 60 ms late
+                           # (2026-11-03), so it's brought forward
+LIVE_VIDEO_KBPS = 4000
+LIVE_IDLE_SECONDS = 20     # keep streaming this long after the last viewer leaves, so a reload rejoins at once
+LIVE_MAX_VIEWERS = 4
+
 # The remote's TV guide: the main channel on top, then make-believe channels filled from the cached shows.
 # Picking a show on one plays it right away ("changing the channel"); when it ends the set goes back to the
 # main channel and joins whatever it has on by then. (number, name, kind); "season" only shows in season

@@ -1,5 +1,5 @@
 import sys, os, json, shutil, logging, threading, time, urllib.request, faulthandler
-faulthandler.dump_traceback_later(50, exit=True, file=open("/tmp/sim/stacks.txt", "w"))
+faulthandler.dump_traceback_later(90, exit=True, file=open("/tmp/sim/stacks.txt", "w"))   # it runs about 50 s
 sys.stdout.reconfigure(line_buffering=True)
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

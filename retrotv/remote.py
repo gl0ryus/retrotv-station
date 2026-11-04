@@ -1,17 +1,18 @@
 """
 The phone remote: a TV-guide web page served on the home network (http://retrotv.local/). It lists the
 main channel and the make-believe ones; picking a show changes the channel. Skip, volume and "play this
-next" too. Standard library only.
+next" too. Also the watch page (/watch), which plays the station live (retrotv/live.py). Standard library only.
 """
 import json
 import logging
 import os
+import queue
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING
 
-from retrotv import schedule
+from retrotv import live, schedule
 from retrotv.cards import FONTS_DIR
 
 if TYPE_CHECKING:   # only for the type checker: retrotv.station imports this module
@@ -23,7 +24,9 @@ WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
 PAGE_FILE = os.path.join(WEB_DIR, "remote.html")
 SCHEDULE_PAGE_FILE = os.path.join(WEB_DIR, "schedule.html")
 HEALTH_PAGE_FILE = os.path.join(WEB_DIR, "health.html")
+WATCH_PAGE_FILE = os.path.join(WEB_DIR, "watch.html")
 COMMON_CSS_FILE = os.path.join(WEB_DIR, "common.css")   # the pages' fonts and palette
+FRAGMENT_WAIT = 30   # seconds without a new fragment before a viewer's stream is given up as stalled
 MAX_BODY = 65536
 MAX_SCHEDULE_BODY = 1024 * 1024
 FONT_FILES = ("ArchivoBlack-Regular.ttf", "BarlowCondensed-Bold.ttf", "BarlowCondensed-ExtraBold.ttf",
@@ -35,6 +38,7 @@ class Handler(BaseHTTPRequestHandler):
     page = b""
     schedule_page = b""
     health_page = b""
+    watch_page = b""
     common_css = b""
     fonts = {}
 
@@ -67,6 +71,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, self.schedule_page, "text/html; charset=utf-8")
             elif url.path == "/health":
                 self._send(200, self.health_page, "text/html; charset=utf-8")
+            elif url.path == "/watch" and self.station.live:
+                self._send(200, self.watch_page, "text/html; charset=utf-8")
+            elif url.path == "/live.mp4" and self.station.live:
+                self._live(self.station.live)
             elif url.path == "/common.css":
                 self._send(200, self.common_css, "text/css; charset=utf-8")
             elif url.path == "/api/health":
@@ -89,6 +97,40 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.exception("Remote request failed")
             self._send(500, {"error": str(e)})
+
+    def _live(self, stream):
+        """The station live, as one long MP4 response that lasts as long as the viewer watches (or the stream runs)."""
+        try:
+            viewer = stream.join()
+        except live.Busy:
+            self._send(503, {"error": "Too many people watching already."})
+            return
+        except live.NotShowing:
+            self._send(503, {"error": "The panel isn't showing a picture right now (the player is starting)."})
+            return
+        except OSError as e:
+            logger.error(f"Watch page: can't start the live stream: {e}")
+            self._send(503, {"error": f"The live stream can't start: {e}"})
+            return
+        try:
+            header = stream.wait_header()
+            if header is None:
+                self._send(503, {"error": "The live stream didn't start."})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(header)
+            while True:
+                fragment = viewer.queue.get(timeout=FRAGMENT_WAIT)
+                if fragment is None:
+                    break
+                self.wfile.write(fragment)
+        except (OSError, queue.Empty):
+            pass   # the viewer left (closed the tab), or the stream stalled
+        finally:
+            stream.leave(viewer)
 
     def _save_schedule(self):
         try:
@@ -157,6 +199,12 @@ def start(station, port):
     except OSError as e:
         logger.error(f"Health page missing: {e}")
         Handler.health_page = b"<p>Health page missing.</p>"
+    try:
+        with open(WATCH_PAGE_FILE, "rb") as f:
+            Handler.watch_page = f.read()
+    except OSError as e:
+        logger.error(f"Watch page missing: {e}")
+        Handler.watch_page = b"<p>Watch page missing.</p>"
     try:
         with open(COMMON_CSS_FILE, "rb") as f:
             Handler.common_css = f.read()
