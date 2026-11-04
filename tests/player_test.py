@@ -33,6 +33,8 @@ rs.PLAYER_MEMORY_MB = 100000   # nothing is too big
 check(p.play(item("act")) and p.play(item("commercial")), "plays")
 first = p.proc.pid
 check(isinstance(p.memory_mb(), int) and p.memory_mb() > 1, f"reads its memory: {p.memory_mb()}")
+with open(f"/proc/{p.proc.pid}/environ", "rb") as f:
+    check(b"MALLOC_ARENA_MAX=2" in f.read().split(b"\0"), "mpv runs with glibc's memory pools capped")
 time.sleep(3.5)
 check(p.memory_restarts == 0 and p.proc.pid == first, "no restart while it's small")
 check(("act", "eof") in ends and ("commercial", "eof") in ends, ends)

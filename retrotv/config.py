@@ -74,10 +74,28 @@ ARCHIVE_ROOT = os.path.join(MEDIA_ROOT, "archive.org")
 # console) shows between items. mpv "retrotv" profile (~/.config/mpv/mpv.conf): full screen on the
 # HDMI panel with a CRT shader
 MPV_SOCKET = "/tmp/retrotv-mpv.sock"
-# --cache=yes reads well ahead even for local files, so a busy SD card can't stall playback (refill
-# copies are also paced while on the air, see COPY_MB_PER_SEC_ON_AIR)
+# The CRT crunch, under everything a file lays over itself (retrotv.overlays). One scale straight to cover 342x200 in
+# the picture's display shape, then a centre crop: the panel's shape at 200 lines, shown with SAR 512/513 at exactly
+# 1024x600, so each scanline is 3 panel pixels. Then composite-style colour fringing, saturation, grain and a vignette,
+# all at low res so they stay cheap. Video faster than about 33 fps first drops every other frame: nobody sees it at this
+# size, and the CRT shader can't keep up at 60 anyway (it dropped 143 frames in 30 s of a 60 fps show; this, 1).
+CRUNCH_VF = ("lavfi=[select='isnan(prev_selected_t)+gte(t-prev_selected_t,0.03)',"
+             "scale=w='if(gt(dar,342/200),trunc(200*dar/2)*2,342)':h='if(gt(dar,342/200),200,trunc(342/dar/2)*2)':flags=area,"
+             "setsar=1,crop=342:200,setsar=sar=512/513:max=1000,eq=saturation=1.3:contrast=1.08,chromashift=cbh=-1:crh=1,"
+             "noise=alls=12:allf=t+u,vignette=angle=PI/5]")
+# Tuned on 2026-11-03 by playing the same files each way on the Pi: a quarter less CPU and memory for mpv.
+# - read ahead 16 MiB, keep nothing behind: every act loads afresh, so nothing ever seeks back into it (was 64 MiB
+#   ahead and 50 behind). Refill copies are also paced while on the air (COPY_MB_PER_SEC_ON_AIR)
+# - bilinear scaling on the GPU: the CRT shader makes the look, lanczos was wasted work
+# - skip H.264/HEVC deblocking: invisible at 342x200, 15-25% less decoding
+# - not the hardware decoder: copying its frames back for the crunch costs more CPU than it saves
 PLAYER_CMD = ["/usr/bin/mpv", "--profile=retrotv", "--really-quiet", "--idle=yes", "--force-window=yes",
-              "--cache=yes", "--demuxer-max-bytes=64MiB", f"--input-ipc-server={MPV_SOCKET}"]
+              "--cache=yes", "--demuxer-max-bytes=16MiB", "--demuxer-max-back-bytes=0",
+              "--scale=bilinear", "--cscale=bilinear", "--dscale=bilinear", "--vd-lavc-skiploopfilter=all",
+              f"--vf={CRUNCH_VF}", f"--input-ipc-server={MPV_SOCKET}"]
+# glibc gives each of mpv's threads its own memory pool and keeps what they free: two pools at most cut how fast mpv's
+# memory grows from 20 to 4.5 MB a minute, with short items back to back
+PLAYER_ENV = {"MALLOC_ARENA_MAX": "2"}
 # mpv's memory creeps up while it runs (2.8 GB after 13 hours on 2026-11-03, which hung the Pi): past this it's
 # restarted at the next break, never during a show. It costs a second of black
 PLAYER_MEMORY_MB = 1200

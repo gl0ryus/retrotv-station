@@ -40,7 +40,7 @@ MOVIE_CATEGORIES = ("movies",)
 CLIP_DIR = os.path.join(DATA_DIR, "show_clips")
 CLIP_SECONDS = 30           # long enough for the end-of-show NEXT bar without going round again
 CLIP_FPS = 15
-CLIP_SPOTS = (0.3, 0.5, 0.7)
+CLIP_SPOTS = (0.5, 0.3, 0.7)   # tried in this order: the first with no black in it is the clip
 CLIP_MIN_VIDEO_SECONDS = 120
 CLIP_CUT_TIMEOUT = 180
 CLIP_KEEP_DAYS = 14
@@ -171,29 +171,30 @@ def clip_file(src):
 
 
 def _cut(video, start, dest):
-    """Cuts a candidate at low priority. True if it has no stretch of black in it."""
-    done = subprocess.run(["nice", "-n", "15", "ffmpeg", "-hide_banner", "-loglevel", "info", "-nostats", "-y", "-threads", "1", "-ss", f"{start:.1f}",
+    """Cuts a candidate at low priority, skipping the decoder's deblocking (invisible at this size, a fifth less CPU).
+    True if it has no stretch of black in it."""
+    done = subprocess.run(["nice", "-n", "15", "ffmpeg", "-hide_banner", "-loglevel", "info", "-nostats", "-y", "-threads", "1",
+                           "-skip_loop_filter", "all", "-ss", f"{start:.1f}",
                            "-i", video, "-t", str(CLIP_SECONDS), "-an", "-sn", "-dn", "-vf", CLIP_FILTER, "-c:v", "libx264", "-preset", "veryfast",
                            "-crf", "26", "-threads", "1", "-movflags", "+faststart", dest], capture_output=True, text=True, timeout=CLIP_CUT_TIMEOUT, check=True)
     return "black_start" not in done.stderr
 
 
 def make_clip(video, duration, dest):
-    """Cuts a silent clip from the middle of a video to dest, from whichever of a few spots has the most going on (it
-    compresses the largest) and no black. False if none will do, or the video is too short for it. Raises if ffmpeg can't."""
+    """Cuts a silent clip from the middle of a video to dest, from the first of a few spots with no black in it: one cut,
+    usually, where comparing all three took three times the CPU. False if none will do, or the video is too short for
+    it. Raises if ffmpeg can't."""
     spots = [duration * f for f in CLIP_SPOTS if duration * f + CLIP_SECONDS < duration]
     if duration < CLIP_MIN_VIDEO_SECONDS or not spots:
         return False
     os.makedirs(CLIP_DIR, exist_ok=True)
-    best, best_size = None, 0
     candidates = [f"{dest}.{i}.mp4" for i in range(len(spots))]
     try:
         for start, candidate in zip(spots, candidates):
-            if _cut(video, start, candidate) and os.path.getsize(candidate) > best_size:
-                best, best_size = candidate, os.path.getsize(candidate)
-        if best:
-            os.replace(best, dest)
-        return bool(best)
+            if _cut(video, start, candidate):
+                os.replace(candidate, dest)
+                return True
+        return False
     finally:
         for candidate in candidates:
             if os.path.exists(candidate):

@@ -11,6 +11,7 @@ import time
 
 from retrotv.jsonio import write_json
 from retrotv.config import (
+    PLAYER_ENV,
     MPV_SOCKET, PLAYER_CMD, PLAYER_MEMORY_CHECK_SECONDS, PLAYER_MEMORY_MB, REMOTE_STATE_FILE, logger)
 
 
@@ -64,7 +65,8 @@ class Player:
             os.remove(MPV_SOCKET)
         except FileNotFoundError:
             pass
-        self.proc = subprocess.Popen(PLAYER_CMD + [f"--volume={self.volume}", f"--mute={'yes' if self.muted else 'no'}"])
+        self.proc = subprocess.Popen(PLAYER_CMD + [f"--volume={self.volume}", f"--mute={'yes' if self.muted else 'no'}"],
+                                     env={**os.environ, **PLAYER_ENV})
         for _ in range(100):
             try:
                 sock = socket.socket(socket.AF_UNIX)
