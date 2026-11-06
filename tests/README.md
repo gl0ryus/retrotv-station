@@ -22,6 +22,7 @@ Simulations work on copies, and `harness.guard` stops them deleting cache files.
 | `launch_timing.py` | When a live launch cuts in, without the network |
 | `music_join_test.py` | Rejoining a music block partway through |
 | `repeats_test.py` | What keeps repeats off: a show counts as aired once it's on, the 30-day wait for episodes and movies, ads once a broadcast day |
+| `overrun_test.py` | A show that runs past its slot keeps its breaks and ends on the :00/:30; one that fits on shorter breaks is still squeezed in |
 | `remote_test.py`, `remote_test3.py` | The phone remote against a simulated station |
 | `snapshots.py` | Records or compares what the cards, screens and lower thirds draw |
 | `preview_cards.py` | Renders the snapshot cards, screens and lower thirds to PNGs, as the CRT stage gets them, to look over |

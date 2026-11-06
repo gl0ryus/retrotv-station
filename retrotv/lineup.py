@@ -88,8 +88,12 @@ class Show:
         mids = len(act_targets(self.duration, self.category, self.src))
         self.keep_breaks = None
         if self.window and self.end > self.window[1] and not off_air(self.window[1]):   # sign-off can wait for it
-            mids, self.end = tight_plan(self.duration, mids, start, self.window[1])
-            self.keep_breaks = mids
+            keep, tight_end = tight_plan(self.duration, mids, start, self.window[1])
+            if tight_end <= self.window[1]:   # it fits by the close on fewer, shorter breaks
+                mids, self.end = keep, tight_end
+                self.keep_breaks = mids
+            # Otherwise it runs over either way: it keeps its breaks and ends on the grid like any show, so what follows
+            # starts on the :00/:30 (Dan, 2026-11-06: a 42 min X-Play XL in the 10-10:30 PM slot put late night at 10:42)
         if self.stretch and self.window and self.window[1] > self.end:
             self.end = self.window[1]   # to its slot's close (Lineup._stretch)
         fill = (self.end - start).total_seconds() - self.duration - INTRO_SECONDS

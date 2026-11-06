@@ -31,7 +31,8 @@ fills from its own shows: when none of them fits the time left in its slot, the 
 commercial breaks stretched to the slot's close, as a real station pads a program to its slot (`Lineup._stretch`).
 A show stretches by at most 30 minutes (`STRETCH_MAX`); a longer gap goes to a show from outside the block. A gap
 more than three hours off (`LINEUP_HOURS`) is left open instead, and a later `plan()` goes on from there, by which
-time the cache may have copied more of the block's shows.
+time the cache may have copied more of the block's shows. A show too long for its slot keeps its breaks and runs to
+the next :00 or :30, so what follows still starts on the half hour (`Show.plan_slot`).
 
 ### The picture
 
