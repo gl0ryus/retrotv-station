@@ -8,6 +8,7 @@ rs = harness.everything()
 from retrotv import art
 from retrotv import cards
 from retrotv import events
+from retrotv import overlays
 
 TMP = tempfile.mkdtemp(prefix="art_test")
 cards.CARDS_DIR = TMP + "/cards"
@@ -128,16 +129,19 @@ urllib.request.urlopen = real_urlopen
 # --- The picture on the lower third
 vf, _ = rs.overlay_filter(1000.0, True, promo="/x/p.ass", art=[("/x/a.png", 10.0, 14.5, True), ("/x/b.png", 14.5, 19.0, False)])
 check(vf.count("movie=/x/") == 2, vf)
-check("overlay=x='14-(1-min(1,(t-10.00)/0.45))*260':y=153-h:eval=frame:enable='between(t,10.00,14.50)'" in vf, "the first slides in with the bar")
-check("overlay=x=14:y=153-h:eval=frame:enable='between(t,14.50,19.00)'" in vf, "the others just appear")
+check(f"overlay=x='{overlays.ART_X}-(1-min(1,(t-10.00)/0.45))*{overlays.ART_SLIDE}':y={overlays.ART_BOTTOM}-h:eval=frame:"
+      "enable='between(t,10.00,14.50)'" in vf, "the first slides in with the bar")
+check(f"overlay=x={overlays.ART_X}:y={overlays.ART_BOTTOM}-h:eval=frame:enable='between(t,14.50,19.00)'" in vf,
+      "the others just appear")
 check(vf.index("ass=filename=/x/p.ass") < vf.index("[art0]overlay"), "over the lower third")
 none, _ = rs.overlay_filter(1000.0, True, promo="/x/p.ass", art=[])
 check("art0" not in none and "ass=filename=/x/p.ass" in none, "no art, same as before")
 
 # --- Clips in the filter chain: timed to their panel, and they stop being decoded with it
 vf, _ = rs.overlay_filter(1000.0, True, promo="/x/p.ass", art=[("/x/c.mp4", 8.0, 16.0, True), ("/x/b.png", 16.0, 24.0, False)])
-check("movie=/x/c.mp4:loop=0,setpts=N/(15*TB)+8.00/TB,trim=end=16.00[art0]" in vf, vf)
-check("movie=/x/b.png[art1]" in vf, "a poster stays a picture")
+bigger = "" if overlays.K == 1 else f",scale=iw*{overlays.K:.4f}:ih*{overlays.K:.4f}"   # without the CRT
+check(f"movie=/x/c.mp4:loop=0,setpts=N/(15*TB)+8.00/TB,trim=end=16.00{bigger}[art0]" in vf, vf)
+check(f"movie=/x/b.png{bigger}[art1]" in vf, "a poster stays a picture")
 
 # --- Which picture
 class Planned:
@@ -188,10 +192,11 @@ except subprocess.SubprocessError:
     check(not [n for n in os.listdir(art.CLIP_DIR) if "." + "0.mp4" in n], "nothing left behind")
 # A clip's timing in a real filter chain: it shows during its panel only
 frame = lambda t, name: subprocess.run(["mpv", video, "--no-config", "--ao=null", "--vo=image", "--vo-image-format=png", f"--vo-image-outdir={TMP}/{name}", f"--start={t}", "--frames=1", "--really-quiet",
-                                         "--vf=scale=342:200,setsar=1," + rs.overlay_filter(300.0, False, art=[(dest, 20.0, 28.0, False)])[0]], timeout=60, check=True)
+                                         f"--vf=scale={overlays.FRAME_W}:{round(200 * overlays.K)},setsar=1," + rs.overlay_filter(300.0, False, art=[(dest, 20.0, 28.0, False)])[0]], timeout=60, check=True)
 for t, name in ((15, "before"), (24, "during"), (35, "after")):
     frame(t, name)
-region = lambda name: subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", f"{TMP}/{name}/00000001.png", "-vf", "crop=90:50:20:125,format=gray", "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
+crop = ":".join(str(round(v * overlays.K)) for v in (90, 50, 20, 125))   # where the poster sits, in the frame's pixels
+region = lambda name: subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", f"{TMP}/{name}/00000001.png", "-vf", f"crop={crop},format=gray", "-f", "rawvideo", "-"], capture_output=True, check=True).stdout
 gap = lambda a, b: sum(abs(x - y) for x, y in zip(region(a), region(b))) / len(region(a))
 check(gap("before", "during") > 3 * gap("before", "after") and gap("before", "during") > 15, f"the clip shows during its panel only: {gap('before', 'during')}, {gap('before', 'after')}")
 # Old clips nobody wants go, and only those

@@ -223,12 +223,12 @@ def glob_cards():
 routes["open-meteo"] = meteo(); W().step()
 now = datetime.datetime.now()
 text = ass_of(cards.weather(wx.load(), "Home", now))
-check("Current Conditions" in text and "Now 70" in text and "UV Index" in text and "Conditions at" not in text, "fresh")
-age(29 * 60); check("Current Conditions" in ass_of(cards.weather(wx.load(), "Home", now)), "29 minutes: no label")
+check("CURRENT CONDITIONS" in text and "NOW 70" in text and "UV INDEX" in text and "CONDITIONS AT" not in text, "fresh")
+age(29 * 60); check("CURRENT CONDITIONS" in ass_of(cards.weather(wx.load(), "Home", now)), "29 minutes: no label")
 age(31 * 60)
 text = ass_of(cards.weather(wx.load(), "Home", now))
 when = cards.clock(now - datetime.timedelta(minutes=31))
-check(f"Conditions at {when}" in text and f"At {when} 70" in text and "Now 70" not in text, "31 minutes: labeled")
+check(f"CONDITIONS AT {when}" in text and f"AT {when} 70" in text and "NOW 70" not in text, "31 minutes: labeled")
 age(179 * 60); check(wx.load() is not None, "just under 3 hours")
 age(181 * 60); check(wx.load() is None, "over 3 hours: no card")
 os.remove(wx.WEATHER_FILE); check(wx.load() is None, "no file")
@@ -237,13 +237,13 @@ with open(wx.WEATHER_FILE, "w") as f:
 check(wx.load() is None, "a damaged file")
 with open(wx.WEATHER_FILE, "w") as f:
     json.dump({**meteo(), "fetched": time.time()}, f)     # as written before this change: no as_of
-check(wx.load() is not None and "Current Conditions" in ass_of(cards.weather(wx.load(), "Home", now)), "the old file format still reads")
+check(wx.load() is not None and "CURRENT CONDITIONS" in ass_of(cards.weather(wx.load(), "Home", now)), "the old file format still reads")
 
 # --- No UV: the card still airs, without that line
 data = meteo(); del data["daily"]["uv_index_max"]; data["as_of"] = data["fetched"] = time.time()
 card = cards.weather(data, "Home", now)
 text = ass_of(card)
-check(card and "UV Index" not in text and "Chance of Rain" in text, "no UV line")
+check(card and "UV INDEX" not in text and "CHANCE OF RAIN" in text, "no UV line")
 
 # --- G|TV Text: with no weather there's no page saying so, and the index doesn't list it
 screens._tt_markets = lambda: screens.TeletextPage(220, "MARKETS", "green")

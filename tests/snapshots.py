@@ -28,15 +28,15 @@ WORK = tempfile.mkdtemp(prefix="snapshots")
 
 def modules():
     """The station's modules, by short name: overlay_filter is in retrotv.overlays once the station module is split."""
-    from retrotv import alerts, cards, events, screens, scores
+    from retrotv import alerts, art, cards, events, screens, scores
     try:
         from retrotv.overlays import overlay_filter  # type: ignore[import-not-found]
     except ImportError:
         from retrotv.station import overlay_filter
-    return alerts, cards, events, screens, scores, overlay_filter
+    return alerts, art, cards, events, screens, scores, overlay_filter
 
 
-alerts, cards, events, screens, scores, overlay_filter = modules()
+alerts, art, cards, events, screens, scores, overlay_filter = modules()
 data = os.path.join(WORK, "data")
 shutil.copytree(harness.frozen("retrotv_data"), data, ignore=shutil.ignore_patterns("show_clips", "team_logos", "*.tmp"))
 moved = harness.redirect(os.path.join(harness.HOME, "retrotv_data"), data)   # never the live files
@@ -62,10 +62,19 @@ rows = [(NOW, "Seinfeld", "S1 E2 · Male Un-Bonding"), (NOW + datetime.timedelta
         (NOW + datetime.timedelta(hours=1), "OFF THE AIR", "Programming resumes at 9:00 AM")]
 BUILDERS = {
     "cards.right_back": lambda: cards.right_back(),
+    "cards.right_back.show": lambda: cards.right_back(None, "Seinfeld"),
+    "cards.right_back.month": lambda: cards.right_back("blackhistory", "The Fresh Prince of Bel-Air"),
+    "cards.right_back.halloween": lambda: cards.right_back("halloween", "Seinfeld"),
     "cards.back_to": lambda: cards.back_to("Seinfeld"),
+    "cards.back_to.episode": lambda: cards.back_to("Seinfeld", None, "S1 E2 · Male Un-Bonding", 1990),
     "cards.up_next": lambda: cards.up_next(("Seinfeld", "S1 E2"), ("Friends", "S2 E1"), NOW, duration=7.0),
+    "cards.up_next.art": lambda: cards.up_next(("Seinfeld", "S1 E2 · Male Un-Bonding"), ("Friends", "S2 E1"), NOW,
+                                               duration=7.0, starts=NOW, year=1990, art=art.wide("Seinfeld")),
+    "cards.up_next.thumb": lambda: cards.up_next(("The Fresh Prince of Bel-Air", "S3 E7 · The Ethnic Tip"), None, None,
+                                                 duration=7.0, starts=NOW, year=1992, art=art.thumb("Futurama")),
     "cards.station_id": lambda: cards.station_id(NOW),
     "cards.station_id.morning": lambda: cards.station_id(NOW, good_morning=True),
+    "cards.station_id.month": lambda: cards.station_id(NOW, month="blackhistory"),
     "cards.sign_off": lambda: cards.sign_off(NOW),
     "cards.stand_by": lambda: cards.stand_by(),
     "cards.guide": lambda: cards.guide(rows, NOW),
@@ -74,6 +83,10 @@ BUILDERS = {
     "events.station_id.christmas": lambda: events.station_id(NOW, season="christmas"),
     "events.reminder": lambda: events.reminder("Mother's Day", NOW.date() + datetime.timedelta(days=3), NOW),
     "events.marathon": lambda: events.marathon("Friday Night Marathon", "Seinfeld", NOW),
+    "events.marathon.lineup": lambda: events.marathon("Friday Night Marathon", "Seinfeld", NOW, None, [
+        (NOW + datetime.timedelta(minutes=30 * i), f"S1 E{i + 1} · " + t) for i, t in enumerate(
+            ("The Seinfeld Chronicles", "The Stake Out", "The Robbery", "Male Un-Bonding", "The Stock Tip"))]),
+    "events.station_id.july4": lambda: events.station_id(NOW, season="july4"),
     "events.marathon_ad": lambda: events.marathon_ad("/x/seinfeld.jpg", "Seinfeld", "This Friday", "4:30 PM"),
     "events.snipe": lambda: events.snipe("The Simpsons", 100.0, 128.0),
     "events.promo": lambda: events.promo([("Next", "Seinfeld"), ("Later", "Friends · 8:30 PM"), ("Tonight", "Futurama · 9:00 PM")], 8.0, 8.0),
@@ -93,6 +106,12 @@ BUILDERS = {
     "screens.art_break": lambda: screens.art_break(NOW),
     "screens.whos_in_space": lambda: screens.whos_in_space(NOW),
     "screens.countdown": lambda: screens.countdown(screens.weekly_chart(), (1, "Artist", "Song"), NOW),
+    "screens.games_today": lambda: screens.games_today(NOW, datetime.date.today(), None, lambda src: True),
+    "screens.born_today": lambda: screens.born_today(NOW, datetime.date.today(), None),
+    "screens.number_one": lambda: screens.number_one(NOW, datetime.date.today(), None, 1993, lambda src: True),
+    "screens.anniversary": lambda: screens.anniversary({"aired": "1990-11-03", "years": 36, "week": [
+        "Mariah Carey's \"Love Takes Time\" was the number one song.", "Home Alone opened in theaters that month."]},
+        "Seinfeld", "S1 E3 · The Robbery", NOW),
     "screens.teletext": lambda: screens.teletext(NOW, weather, "Holiday, FL", [(NOW, "Seinfeld", "S1 E2")], ["A goat ate a car"]),
     "alerts.crawl_script": lambda: alerts.crawl_script("TORNADO WARNING FOR PASCO COUNTY UNTIL 9:15 PM", "WEATHER ALERT", 30.0),
     "alerts.test_card": lambda: alerts.test_card(),

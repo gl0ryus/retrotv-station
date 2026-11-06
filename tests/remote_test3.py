@@ -13,6 +13,9 @@ cards.CARDS_DIR = "/tmp/sim/cards"
 shutil.copy(os.path.expanduser("~/retrotv_manifest.json"), "/tmp/sim/manifest.json")
 harness.guard(rs)
 rs.MANIFEST_FILE, rs.SERIES_FILE, rs.REMOTE_STATE_FILE = "/tmp/sim/manifest.json", "/tmp/sim/series.json", "/tmp/sim/remote.json"
+rs.PLAY_LOG_FILE = "/tmp/sim/plays.jsonl"   # not the station's play log
+rs.LIVE_STREAM = False   # no watch page: it would start a MediaMTX on the station's own ports
+rs.LINEUP_FILE = "/tmp/sim/lineup.json"   # not the station's day plan, which a restart picks back up
 rs.MPV_SOCKET = "/tmp/h-mpv.sock"
 rs.PLAYER_CMD = ["/usr/bin/mpv", "--profile=retrotv", "--really-quiet", "--idle=yes", "--vo=null", "--ao=null", f"--input-ipc-server={rs.MPV_SOCKET}"]
 rs.SPECIALS = {}

@@ -14,6 +14,8 @@ import random
 import re
 import time
 
+from retrotv import brand, glyphs
+from retrotv.brand import circle, rect
 from retrotv.paths import ASSETS_DIR, HOME_DIR
 
 logger = logging.getLogger("RetroTV")
@@ -25,9 +27,15 @@ ID_BACKGROUND = os.path.join(ASSETS_DIR, "bumper_512.mp4")  # the bumper at rend
 WEATHER_FILE = os.path.join(HOME_DIR, "retrotv_weather.json")
 
 W, H = 1024, 600
+# False (the station's look since 2026-11-05): the panel's full 1024x600 through a soft CRT shader (config.HD_SHADER).
+# True: the classic CRT, every picture squeezed to 342x200 and drawn by mpv.conf's shader, so the cards render at
+# 512x300, all that stage keeps. retrotv.config builds the player's filters from it
+CRT = False
+# Cards are drawn at 512x300 either way; at full size mpv scales them up. libass redraws every frame on the CPU, and at
+# 1024x600 the weather card drew at just real time and the guide at 0.8x on air (2026-11-06), which starved their
+# sound and stalled the player; at 512x300 they draw at 2.4-2.7x
 RENDER = "512x300"
 BACKGROUND = "0x16110d"   # the bumper's warm near-black
-WEATHER_BACKGROUND = "0x1a2378"
 
 # Two names on screen: the channel (guides, info screens, the break cards) and the network behind it, as
 # on the bumper and the corner bug (station IDs, sign-off, emergency alerts, holiday greetings)
@@ -39,22 +47,11 @@ CREAM = "&H00D2E6EF&"
 MUSTARD = "&H003AB3E8&"
 SHADOW_RED = "&H001F2A8A&"
 BLACK = "&H00000000&"
-STRIPES = ("&H003DB3F2&", "&H002A7FEE&", "&H00274FDD&", "&H002A32B8&")  # yellow, orange, red-orange, red
 WHITE = "&H00FFFFFF&"
 YELLOW = "&H004AE1FF&"
 SKY = "&H00FFD8A8&"
 PANEL = "&H00963523&"
-HEADER = "&H006E1E3C&"
-TICKER = "&H003D0F0A&"
-ORANGE_RULE = "&H002C8AF0&"
 
-# The program guide's browns, the same as the remote's listings on retrotv.local (retrotv/web/remote.html)
-GUIDE_BAND = "&H0017202B&"   # --panel  #2b2017
-GUIDE_TIME = "&H00122A3D&"   # the main channel's column  #3d2a12
-GUIDE_CELL = "&H00143A5C&"   # the main channel's shows  #5c3a14
-GUIDE_NOW = "&H00164D7A&"    # ... and the one on now  #7a4d16
-GUIDE_EDGE = "&H0032527A&"   # --edge  #7a5232
-TAN = "&H0088ADC4&"          # --sky  #c4ad88, the listings' episode lines
 
 # Holiday colours, for the station IDs (retrotv.events) and the cards' holiday looks (LOOKS below)
 ORANGE = "&H001A7AFF&"
@@ -116,6 +113,9 @@ def clock(t):
 
 
 def text_width(text, font, size, spacing=0):
+    """How wide text sets at \\fs size: measured from the font's own widths (retrotv.glyphs) where it has them."""
+    if font in glyphs.WIDTHS:
+        return brand.measure(text, font, size * glyphs.UNITS[font] / glyphs.HEIGHT[font], spacing)
     return len(text) * (size * WIDTH_FACTOR[font] + spacing)
 
 
@@ -132,8 +132,6 @@ def clip_text(text, limit):
     return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
 
 
-LABEL_INK = "&H00161110&"   # the words in a lower third's mustard label box
-BAR_RULE = "&H002A7FEE&"    # the line under a lower third
 
 
 class Script:
@@ -164,12 +162,17 @@ class Script:
     def raw(self, start, end, tags, body, layer=2):
         self.events.append((layer, start, end, "{" + tags + "}" + body))
 
-    def card(self, kind, duration, music=None, card_kind="card", **options):
+    def card(self, kind, duration, music=None, card_kind="card", picture=None, **options):
         """This script as a finished screen: written out, laid over its background with its music, as a Card.
+        picture: a Picture laid between the events below its layer and the rest (two scripts, then).
         options go to lavfi_url (background=, loop=, fade_out=, ...)."""
+        if picture:
+            under = self.write(kind + "-under", [e for e in self.events if e[0] < picture.layer])
+            over = self.write(kind, [e for e in self.events if e[0] >= picture.layer])
+            return Card(lavfi_url(over, duration, music, picture=picture, under=under, **options), duration, card_kind)
         return Card(lavfi_url(self.write(kind), duration, music, **options), duration, card_kind)
 
-    def write(self, kind):
+    def write(self, kind, events=None):
         path = _next_path(kind)
         lines = [
             "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {W}", f"PlayResY: {H}",
@@ -183,55 +186,11 @@ class Script:
             "", "[Events]",
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
         ]
-        for layer, start, end, body in self.events:
+        for layer, start, end, body in self.events if events is None else events:
             lines.append(f"Dialogue: {layer},{ts(start)},{ts(end)},Default,,0,0,0,,{body}")
         with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
         return path
-
-
-def rect(w, h):
-    return f"m 0 0 l {w} 0 l {w} {h} l 0 {h}"
-
-
-def slanted_bar(w, h, slant):
-    """A bar with a slanted right end, like the stripes in the bumper."""
-    return f"m 0 0 l {w} 0 l {w - slant} {h} l 0 {h}"
-
-
-def circle(r):
-    """A circle in the box 0,0 .. 2r,2r."""
-    k = 0.5523 * r
-    c, e = r, 2 * r
-    return (f"m {c:.1f} 0 b {c + k:.1f} 0 {e:.1f} {c - k:.1f} {e:.1f} {c:.1f} "
-            f"b {e:.1f} {c + k:.1f} {c + k:.1f} {e:.1f} {c:.1f} {e:.1f} "
-            f"b {c - k:.1f} {e:.1f} 0 {c + k:.1f} 0 {c:.1f} "
-            f"b 0 {c - k:.1f} {c - k:.1f} 0 {c:.1f} 0")
-
-
-def rounded(w, h, r):
-    """A rectangle with rounded corners, like the remote's listings cells."""
-    k = 0.5523 * r
-    return (f"m {r} 0 l {w - r} 0 b {w - r + k:.1f} 0 {w} {r - k:.1f} {w} {r} l {w} {h - r} "
-            f"b {w} {h - r + k:.1f} {w - r + k:.1f} {h} {w - r} {h} l {r} {h} b {r - k:.1f} {h} 0 {h - r + k:.1f} 0 {h - r} "
-            f"l 0 {r} b 0 {r - k:.1f} {r - k:.1f} 0 {r} 0")
-
-
-def stripes(s, start, end, x, y, width, bar=9, gap=5, slide=True, fade=(200, 250), colors=STRIPES):
-    """The four network stripes, sliding in from the left. More colours (Pride's six) share the same height."""
-    k = min(1.0, 4 / len(colors))
-    for i, color in enumerate(colors):
-        by = round(y + i * (bar + gap) * k)
-        extra = f"\\move({x - width - 60:.0f},{by},{x},{by},0,{350 + i * 60})" if slide else ""
-        s.shape(start, end, x, by, slanted_bar(width - i * 14, round(bar * k), round((bar + 6) * k)), color,
-                fade=fade, extra=extra)
-
-
-def stripe_band(s, start, end, y, colors=STRIPES, x=0, width=W, fade=(300, 400), layer=1):
-    """The four stripes straight across, like the band over the remote's listings."""
-    k = min(1.0, 4 / len(colors))
-    for i, color in enumerate(colors):
-        s.shape(start, end, x, round(y + i * 6 * k), rect(width, max(2, round(4 * k))), color, fade=fade, layer=layer)
 
 
 # --- Holiday props ---
@@ -342,7 +301,6 @@ LILAC = "&H00E0A0C8&"
 STEEL = "&H00C88C50&"
 NAVY = "&H00785028&"
 DEEP_NAVY = "&H00502810&"
-WINTER_BLUE = "&H00C8A070&"
 SLATE = "&H00805838&"
 
 _snow = _drifting(circle(4), (WHITE,), 50, "&H40&", scale=(50, 125), fall=(150, 330), spin=0, extra="\\blur1")
@@ -365,12 +323,10 @@ _ties = _drifting(TIE, (STEEL, MUSTARD, NAVY, GLORY_RED), 10, "&H60&", scale=(70
 
 
 class Look:
-    """How a card dresses: its background (0xRRGGBB), the stripes (four, or Pride's six), the kicker colour,
-    the headline and its shadow, the info screens' header rule, and props drifting over it in a holiday
-    season. title: the day's or month's name, for the lines that mention it."""
-    def __init__(self, bg, stripes, accent, headline, shadow, rule, props=None, title=""):
-        self.bg, self.stripes, self.accent, self.headline = bg, stripes, accent, headline
-        self.shadow, self.rule, self.props, self.title = shadow, rule, props, title
+    """How a card dresses for a holiday season or a heritage month: the G|TV accent it picks from the style guide's
+    four (tint), props drifting over it, and title: the day's or month's name, for the lines that mention it."""
+    def __init__(self, title="", tint=brand.ORANGE, props=None):
+        self.title, self.tint, self.props = title, tint, props
 
     def dress(self, s, start, end, clip="", layer=0, solid=False):
         """The look's props, if any: on the bottom layer, behind everything, unless told otherwise.
@@ -379,59 +335,39 @@ class Look:
             self.props(s, start, end, random.Random(), clip, layer, solid)
 
 
-HOUSE = Look(BACKGROUND, STRIPES, MUSTARD, CREAM, SHADOW_RED, ORANGE_RULE)
-_PATRIOTIC = ("0x0a0e24", (GOLD, GLORY_RED, WHITE, LIGHT_BLUE), GOLD, CREAM, GLORY_RED, GLORY_RED, _stars)
+HOUSE = Look()
 # The holiday seasons and days the station dresses up for (retrotv.station's HOLIDAYS and HOLIDAY_IDS)
 LOOKS = {
-    "halloween": Look("0x140a1c", (PUMPKIN, ORANGE, "&H00C04A8E&", SLIME), ORANGE, CREAM, PURPLE, ORANGE, _bats,
-                      "Halloween"),
-    "christmas": Look("0x0b1a10", (GOLD, XMAS_RED, CREAM, MARDI_GREEN), GOLD, WHITE, XMAS_RED, XMAS_RED, _snow,
-                      "Christmas"),
-    "thanksgiving": Look("0x1a1008", (MUSTARD, PUMPKIN, MAPLE, RUST), PUMPKIN, CREAM, RUST, PUMPKIN, _leaves,
-                         "Thanksgiving"),
-    "valentines": Look("0x1c0a14", (BLUSH, PINK, ROSE, "&H00501CA0&"), PINK, CREAM, ROSE, PINK, _hearts,
-                       "Valentine's Day"),
-    "stpatricks": Look("0x0a1a0e", (GOLD, CLOVER, KELLY, "&H00307A18&"), GOLD, CREAM, KELLY, CLOVER, _shamrocks,
-                       "St. Patrick's Day"),
-    "easter": Look("0x1c1626", (PASTELS[3], PASTELS[0], PASTELS[1], PASTELS[2]), PASTELS[3], WHITE, LILAC_SHADOW,
-                   PASTELS[0], _eggs, "Easter"),
-    "july4": Look(*_PATRIOTIC, "Independence Day"),
-    "newyearsday": Look("0x0a0a1a", (GOLD, SILVER, YELLOW, SILVER), GOLD, WHITE, GLORY_BLUE, GOLD, _confetti,
-                        "New Year's Day"),
-    "mlkday": Look("0x0c1020", (GOLD, CREAM, STEEL, NAVY), GOLD, CREAM, GLORY_BLUE, GOLD, None,
-                   "Martin Luther King Jr. Day"),
-    "groundhog": Look("0x101418", (WHITE, SKY, WINTER_BLUE, SLATE), SKY, WHITE, SLATE, SKY, _snow, "Groundhog Day"),
-    "mardigras": Look("0x140a1e", (GOLD, MARDI_GREEN, "&H00C04A8E&", PURPLE), GOLD, CREAM, PURPLE, MARDI_GREEN,
-                      _beads, "Mardi Gras"),
-    "aprilfools": Look("0x0a1a1a", tuple(reversed(STRIPES)), SLIME, CREAM, LIGHT_BLUE, SLIME, _questions,
-                       "April Fools' Day"),
-    "cincodemayo": Look("0x1a0c14", (PAPEL_COLORS[4], ORANGE, PAPEL_COLORS[0], PAPEL_COLORS[2]), PAPEL_COLORS[3],
-                        CREAM, PAPEL_COLORS[0], ORANGE, _papel, "Cinco de Mayo"),
-    "mothersday": Look("0x1c0a16", (BLUSH, PINK, LILAC, ROSE), PINK, CREAM, WINE, PINK, _flowers, "Mother's Day"),
-    "memorialday": Look(*_PATRIOTIC, "Memorial Day"),
-    "fathersday": Look("0x0a1420", (MUSTARD, STEEL, NAVY, SLATE), MUSTARD, CREAM, DEEP_NAVY, STEEL, _ties,
-                       "Father's Day"),
-    "juneteenth": Look("0x0c0e22", (CREAM, GLORY_RED, CREAM, LIGHT_BLUE), GOLD, CREAM, GLORY_RED, GLORY_RED,
-                       _white_stars, "Juneteenth"),
-    "laborday": Look(*_PATRIOTIC, "Labor Day"),
-    "veteransday": Look(*_PATRIOTIC, "Veterans Day"),
+    "halloween": Look("Halloween", brand.ORANGE, _bats),
+    "christmas": Look("Christmas", brand.TEAL, _snow),
+    "thanksgiving": Look("Thanksgiving", brand.ORANGE, _leaves),
+    "valentines": Look("Valentine's Day", brand.PINK, _hearts),
+    "stpatricks": Look("St. Patrick's Day", brand.TEAL, _shamrocks),
+    "easter": Look("Easter", brand.PINK, _eggs),
+    "july4": Look("Independence Day", brand.BLUE, _stars),
+    "newyearsday": Look("New Year's Day", brand.BLUE, _confetti),
+    "mlkday": Look("Martin Luther King Jr. Day", brand.BLUE),
+    "groundhog": Look("Groundhog Day", brand.BLUE, _snow),
+    "mardigras": Look("Mardi Gras", brand.TEAL, _beads),
+    "aprilfools": Look("April Fools' Day", brand.TEAL, _questions),
+    "cincodemayo": Look("Cinco de Mayo", brand.PINK, _papel),
+    "mothersday": Look("Mother's Day", brand.PINK, _flowers),
+    "memorialday": Look("Memorial Day", brand.BLUE, _stars),
+    "fathersday": Look("Father's Day", brand.BLUE, _ties),
+    "juneteenth": Look("Juneteenth", brand.ORANGE, _white_stars),
+    "laborday": Look("Labor Day", brand.BLUE, _stars),
+    "veteransday": Look("Veterans Day", brand.BLUE, _stars),
 }
-# The heritage months (retrotv.station's MONTHS), kept subtle: their stripes and name on Right Back, their name
-# on every other station ID, and on Today in History and Pop Quiz when those have something on the subject.
-# A holiday inside the month takes over on its day
+# The heritage months (retrotv.station's MONTHS), kept subtle: their name on Right Back, on every other station ID,
+# and on Today in History and Pop Quiz when those have something on the subject. A holiday inside the month takes
+# over on its day
 MONTH_LOOKS = {
-    "blackhistory": Look(BACKGROUND, (GOLD, "&H002E10C8&", "&H00449A00&", MOSS), GOLD, CREAM, SHADOW_RED,
-                         "&H002E10C8&", None, "Black History Month"),
-    "womenshistory": Look(BACKGROUND, (GOLD, CREAM, LILAC, "&H00A03C78&"), LILAC, CREAM, SHADOW_RED,
-                          "&H00A03C78&", None, "Women's History Month"),
-    "aapi": Look(BACKGROUND, (GOLD, "&H005070F0&", "&H002828C8&", "&H0078A030&"), "&H005070F0&", CREAM, SHADOW_RED,
-                 "&H0078A030&", None, "AAPI Heritage Month"),
-    "pride": Look(BACKGROUND, ("&H000303E4&", "&H00008CFF&", "&H0000EDFF&", "&H00268000&", "&H00E06F3A&",
-                               "&H00C04F9B&"), "&H00008CFF&", CREAM, SHADOW_RED, "&H00C04F9B&", None, "Pride Month"),
-    "hispanic": Look(BACKGROUND, (MUSTARD, ORANGE, "&H002828D0&", "&H00508C20&"), ORANGE, CREAM, SHADOW_RED,
-                     "&H00508C20&", None, "Hispanic Heritage Month"),
-    "nativeamerican": Look(BACKGROUND, ("&H0080C0E0&", "&H003C64C8&", "&H00B0C030&", "&H00283C96&"), "&H00B0C030&",
-                           CREAM, SHADOW_RED, "&H003C64C8&", None, "Native American Heritage Month"),
+    "blackhistory": Look("Black History Month"),
+    "womenshistory": Look("Women's History Month"),
+    "aapi": Look("AAPI Heritage Month"),
+    "pride": Look("Pride Month", brand.PINK),
+    "hispanic": Look("Hispanic Heritage Month"),
+    "nativeamerican": Look("Native American Heritage Month"),
 }
 
 
@@ -440,35 +376,61 @@ def look(season):
     return LOOKS.get(season) or MONTH_LOOKS.get(season) or HOUSE
 
 
-def info_header(s, d, title_pages, now, band, kicker=CHANNEL, season=None, ticking=True):
-    """The info screens' header: a band with a rule under it, the kicker, a title per page
-    [(start, end, text)] and, with ticking, the clock and date on the right."""
-    lk = look(season)
-    fade = (300, 400)
-    s.shape(0, d, 0, 0, rect(W, 168), band, fade=fade, layer=1)
-    s.shape(0, d, 0, 168, rect(W, 6), lk.rule, fade=fade, layer=1)
-    # Long kickers and titles (a heritage month's) shrink to keep clear of the clock or the quiz's dial
-    s.text(0, d, 80, 82, kicker, BARLOW_X, fit(kicker, BARLOW_X, 30, 680, spacing=6), lk.accent, align=4, spacing=6,
-           fade=fade)
-    for a, b, title in title_pages:
-        s.text(a, b, 80, 130, title, BARLOW_X, fit(title, BARLOW_X, 56, 800), YELLOW, align=4, shadow=3,
-               shadow_color=BLACK, fade=(300, 300))
-    if ticking:
-        s.text(0, d, 944, 132, now.strftime("%a %b %-d").upper(), BARLOW_S, 32, SKY, align=6, fade=fade)
-        for sec in range(int(d) + 1):
-            t = now + datetime.timedelta(seconds=sec)
-            s.text(sec, min(d, sec + 1), 944, 88, clock(t), BARLOW_X, 44, WHITE, align=6, fade=None)
+def info_header(s, d, title_pages, now, kicker=CHANNEL, season=None, ticking=True):
+    """The info screens' header, as the guide draws it: the kicker in the accent and the title on yellow, a purple
+    shadow under both, a title per page [(start, end, text)]; with ticking, the day and time in a white chip top
+    right."""
+    brand.header(s, d, title_pages, accent=look(season).tint, kicker=kicker)
+    if ticking and now:
+        brand.date_chip(s, d, now)
+
+
+class Picture:
+    """A picture laid on a card between its lower layers and the rest (see Script.card): it fills w x h at x, y on
+    the canvas (cropped to fit) inside a white border, turned tilt degrees clockwise. inset: pixels to trim off
+    each edge first (the lower-third thumbnails come with a frame of their own)."""
+    def __init__(self, path, x, y, w, h, layer=3, border=8, tilt=0.0, inset=0):
+        self.path, self.x, self.y, self.w, self.h = path, x, y, w, h
+        self.layer, self.border, self.tilt, self.inset = layer, border, tilt, inset
+
+    def shadow(self, s, d, offset=10, color=None, fade=(250, 250)):
+        """Its hard shadow, drawn under it."""
+        b = self.border
+        cx, cy = self.x + self.w / 2, self.y + self.h / 2
+        brand.shape(s, 0, d, self.x - b + offset, self.y - b + offset, rect(self.w + 2 * b, self.h + 2 * b),
+                    color or brand.INK, fade=fade, layer=self.layer - 1,
+                    extra=f"\\org({cx + offset:.1f},{cy + offset:.1f})\\frz{-self.tilt:g}")
+
+    def graph(self, d):
+        """The picture as a lavfi chain at render size, and where it goes: (chain, x, y) for overlay."""
+        scale = int(RENDER.split("x")[0]) / W   # canvas to render
+        w, h, b = round(self.w * scale), round(self.h * scale), max(1, round(self.border * scale))
+        chain = f"movie=filename={self.path},loop=loop=-1:size=1:start=0,setpts=N/(30*TB),trim=duration={d:.2f}"
+        if self.inset:
+            chain += f",crop=iw-{2 * self.inset}:ih-{2 * self.inset}:{self.inset}:{self.inset}"
+        chain += (f",scale={w}:{h}:force_original_aspect_ratio=increase:flags=lanczos,crop={w}:{h},"
+                  f"pad={w + 2 * b}:{h + 2 * b}:{b}:{b}:color=white,format=rgba")
+        if self.tilt:
+            a = f"{self.tilt}*PI/180"
+            chain += f",rotate={a}:c=none:ow=rotw({a}):oh=roth({a})"
+        cx, cy = (self.x + self.w / 2) * scale, (self.y + self.h / 2) * scale
+        return chain, f"{cx:.1f}-w/2", f"{cy:.1f}-h/2"
 
 
 def lavfi_url(ass_path, duration, music=None, background=BACKGROUND, video_source=None, audio_source=None,
-              fade_out=True, loop=False):
+              fade_out=True, loop=False, picture=None, under=None):
     """An mpv URL that renders the script over a background, with an audio bed trimmed to length (looped
-    when the bed is shorter than the card)."""
+    when the bed is shorter than the card). picture: a Picture laid over the background and the under script."""
     d = f"{duration:.2f}"
     if video_source:
         video = f"movie=filename={video_source},scale={RENDER.replace('x', ':')},setsar=1"
     else:
         video = f"color=c={background}:s={RENDER}:r=30:d={d}"
+    if picture:
+        if under:
+            video += f",ass=filename={under}:fontsdir={FONTS_DIR}"
+        chain, x, y = picture.graph(duration)
+        video += f"[bg];{chain}[pic];[bg][pic]overlay=x={x}:y={y}"
     video += f",ass=filename={ass_path}:fontsdir={FONTS_DIR},format=yuv420p"
     if audio_source:
         audio = f"amovie=filename={audio_source}"
@@ -489,161 +451,299 @@ def music(name):
 class Card:
     def __init__(self, url, duration, kind):
         self.url, self.duration, self.kind = url, duration, kind
+        self.follow = None   # a cached file to air right after the card: its game's ad, its song's video
 
 
 # --- Cards ---
 
-def right_back(season=None):
-    """season: a holiday, or a heritage month, which shows in the stripes and the line under them."""
+Part = brand.Part
+
+
+def episode_parts(episode):
+    """("S1 E2", "Male Un-Bonding") from "S1 E2 · Male Un-Bonding"; a dated episode's date is its code too."""
+    if not episode:
+        return None, None
+    code, _, rest = episode.partition(" · ")
+    if rest:
+        return code, rest
+    return (code, None) if re.match(r"^S\d+ E\d+$", code) else (None, code)
+
+
+def _over_programme(s, d, lk):
+    """The ground for the cards the guide lays over a programme: the stand-in glow, the season's props and the
+    badge in the corner."""
+    brand.stage(s, d)
+    lk.dress(s, 0, d, layer=1)
+    brand.corner_badge(s, 0, d, lk.tint)
+
+
+def right_back(season=None, name=None):
+    """We'll Be Right Back: the pause sign and the words on yellow, WITH MORE and the show under them. season: a
+    holiday (its accent and props) or a heritage month (named on a chip below)."""
     d = 3.5
     lk = look(season)
     s = Script()
-    lk.dress(s, 0, d)
-    s.text(0, d, 512, 205, "WE'LL BE", ARCHIVO, 62, lk.headline, shadow=5, shadow_color=lk.shadow, slant=-0.15)
-    s.text(0.1, d, 512, 295, "RIGHT BACK", ARCHIVO, 104, lk.headline, shadow=6, shadow_color=lk.shadow, slant=-0.15)
-    stripes(s, 0, d, 190, 362, 640, colors=lk.stripes)
-    footer = f"{CHANNEL} · {lk.title.upper()}" if season in MONTH_LOOKS else CHANNEL
-    s.text(0.4, d, 512, 470, footer, BARLOW_X, fit(footer, BARLOW_X, 44, 900, spacing=10), lk.accent, spacing=10)
-    return s.card("rightback", d, music("sting_break.ogg"), background=lk.bg)
+    _over_programme(s, d, lk)
+    month = lk.title.upper() if season in MONTH_LOOKS else None
+    top = 600 - 64 - (8 + 40 if name else 0) - (8 + 30 if month else 0) - 60
+    slide = (0, 350, 120)
+    pause = Part("", brand.ANTON, 40, brand.INK, lk.tint, pad=0, width=58)
+    brand.strip(s, 0, d, 56, top, 64, [pause, Part("WE'LL BE RIGHT BACK", brand.ANTON, 46, brand.INK, brand.YELLOW,
+                                                   pad=26)], shadow=(6, 6, brand.INK), slide=slide)
+    for bx in (72, 89):   # the pause sign, upright in its leaning box
+        brand.shape(s, 0, d, bx, top + 17, rect(9, 30), brand.INK, slide=slide, layer=6)
+    y = top + 72
+    if name:
+        name = brand.clip(name.upper(), brand.ANTON, 28, 520)
+        brand.strip(s, 0.15, d, 84, y, 40, [Part("WITH MORE", brand.ANTON, 21, brand.YELLOW, brand.INK, pad=14, spacing=0.8),
+                                            Part(name, brand.ANTON, 28, brand.WHITE, brand.PURPLE, pad=18, width=220)],
+                    shadow=(5, 5, brand.INK), slide=(150, 500, 120))
+        y += 48
+    if month:
+        brand.strip(s, 0.3, d, 98, y, 30, [Part(f"CELEBRATING {month}", brand.ARCHIVO_BLACK, 16, brand.INK, brand.WHITE,
+                                                pad=14)], shadow=(4, 4, brand.INK), slide=(300, 650, 120))
+    return s.card("rightback", d, music("sting_break.ogg"), background=brand.STAGE_BG)
 
 
-def back_to(name, season=None):
+def back_to(name, season=None, episode=None, year=None):
+    """Now Back To: the words on yellow and the show on purple, and under them the episode, its title and its
+    year, each on its own part of a strip."""
     d = 3.5
     lk = look(season)
     s = Script()
-    lk.dress(s, 0, d)
-    s.text(0, d, 512, 190, "NOW BACK TO", BARLOW_X, 50, lk.accent, spacing=6)
-    name = clip_text(name.upper(), 34)
-    s.text(0.1, d, 512, 285, name, ARCHIVO, fit(name, ARCHIVO, 88, 860), lk.headline, shadow=6,
-           shadow_color=lk.shadow, slant=-0.15)
-    stripes(s, 0, d, 190, 350, 640, colors=lk.stripes)
-    s.text(0.4, d, 512, 470, CHANNEL, BARLOW_X, 44, lk.accent, spacing=10)
-    return s.card("backto", d, music("sting_back.ogg"), background=lk.bg)
+    _over_programme(s, d, lk)
+    code, title = episode_parts(episode)
+    under = []
+    if code:
+        under.append(Part(brand.clip(code.upper(), brand.ANTON, 24, 200), brand.ANTON, 24, brand.YELLOW, brand.INK, pad=14))
+    if title:
+        under.append(Part(brand.clip(title.upper(), brand.ARCHIVO_BLACK, 18, 460), brand.ARCHIVO_BLACK, 18, brand.INK,
+                          brand.WHITE, pad=16))
+    if year:
+        under.append(Part(str(year), brand.ARCHIVO_BLACK, 18, brand.YELLOW, brand.INK, pad=14))
+    top = 600 - 62 - 62 - (8 + 38 if under else 0)
+    name = brand.clip(name.upper(), brand.ANTON, 42, 600)
+    brand.strip(s, 0, d, 56, top, 62, [Part("NOW BACK TO", brand.ANTON, 30, brand.INK, brand.YELLOW, pad=20),
+                                       Part(name, brand.ANTON, 42, brand.WHITE, brand.PURPLE, pad=24, width=380)],
+                shadow=(6, 6, brand.INK), slide=(0, 350, 120))
+    if under:
+        brand.strip(s, 0.15, d, 86, top + 70, 38, under, shadow=(5, 5, brand.INK), slide=(150, 500, 120))
+    return s.card("backto", d, music("sting_back.ogg"), background=brand.STAGE_BG)
 
 
-def up_next(show, later=None, later_time=None, duration=7.0, season=None):
-    """show and later are (name, episode) pairs; later_time is a datetime. The duration stretches
-    a few seconds either way so the next show starts right on the half hour."""
+def wrapped(text, font, em, width, lines=2, least=0.66):
+    """text in at most `lines` lines no wider than width, at the largest em (down to least of it) that makes it
+    fit; the last line is cut short if it still doesn't. Returns (lines, em)."""
+    words_ = text.split()
+    size = em
+    while True:
+        out, line = [], ""
+        for w in words_:
+            trial = f"{line} {w}".strip()
+            if line and brand.measure(trial, font, size) > width:
+                out.append(line)
+                line = w
+            else:
+                line = trial
+        out.append(line)
+        if (len(out) <= lines and all(brand.measure(x, font, size) <= width for x in out)) or size <= em * least:
+            break
+        size = max(em * least, size - 2)
+    if len(out) > lines:
+        out = out[:lines - 1] + [" ".join(out[lines - 1:])]
+    out[-1] = brand.clip(out[-1], font, size, width)
+    return out, size
+
+
+def up_next(show, later=None, later_time=None, duration=7.0, season=None, starts=None, year=None, art=None):
+    """Up Next, full screen: the words in yellow, the show under them in white with its start time, episode and
+    year on chips, the episode's title, and LATER along the bottom; the show's picture on the purple side, or the
+    badge when it has none. show and later are (name, episode) pairs; later_time and starts are datetimes; art
+    is a picture file. The duration stretches a few seconds either way so the next show starts right on time."""
     d = round(duration, 2)
     lk = look(season)
     s = Script()
-    lk.dress(s, 0, d)
-    s.text(0, d, 90, 140, "UP NEXT", ARCHIVO, 84, lk.headline, align=4, shadow=6, shadow_color=lk.shadow, slant=-0.15)
-    stripes(s, 0, d, 520, 118, 440, colors=lk.stripes)
+    brand.split(s, d)
+    lk.dress(s, 0, d, layer=2)
+    slide = (0, 400, 90)
+    brand.words(s, 0, d, 52, 104, "UP NEXT", brand.ANTON, 92, brand.YELLOW, shadow=(6, 6, brand.PURPLE), slide=slide)
     name, episode = show
-    name = clip_text(name, 38)
-    s.text(0.3, d, 92, 258, name, BARLOW_X, fit(name, BARLOW_X, 84, 840), lk.headline, align=4, shadow=3,
-           shadow_color=lk.shadow)
-    if episode:
-        s.text(0.5, d, 94, 325, clip_text(episode, 52), BARLOW_S, 44, lk.accent, align=4)
+    lines, em = wrapped(name.upper(), brand.ANTON, 62, 520)
+    y = 196
+    for i, line in enumerate(lines):
+        brand.words(s, 0.15, d, 54, y + i * em * 0.98, line, brand.ANTON, em, brand.WHITE, slide=(150, 550, 90))
+    y += (len(lines) - 1) * em * 0.98 + em * 0.5 + 34
+    code, title = episode_parts(episode)
+    chips = []
+    if starts:
+        chips.append(Part(clock(starts), brand.ARCHIVO_BLACK, 21, brand.INK, lk.tint, pad=16))
+    if code:
+        chips.append(Part(code.upper(), brand.ARCHIVO_BLACK, 21, brand.INK, brand.WHITE, pad=16))
+    if year:
+        chips.append(Part(str(year), brand.ARCHIVO_BLACK, 21, brand.WHITE, pad=14, border=(3, brand.WHITE)))
+    cx = 62
+    for chip in chips:
+        cx += brand.strip(s, 0.3, d, cx, y - 19, 38, [chip], slide=(300, 700, 90)) + 10
+    if title:
+        brand.words(s, 0.45, d, 58, y + 46, brand.clip(title.upper(), brand.ARCHIVO, 23, 500), brand.ARCHIVO, 23,
+                    brand.SILVER, bold=True, slide=(450, 850, 90))
     if later:
-        s.shape(0.8, d, 90, 392, rect(844, 3), lk.accent)
-        s.text(1.0, d, 92, 450, "LATER", BARLOW_X, 42, lk.accent, align=4, spacing=4)
-        later_name = clip_text(later[0], 34)
-        s.text(1.1, d, 225, 450, later_name, BARLOW_B, fit(later_name, BARLOW_B, 44, 560), align=4)
+        later_name = brand.clip(later[0].upper(), brand.ARCHIVO_BLACK, 20, 300)
+        parts = [Part("LATER", brand.ANTON, 28, brand.INK, brand.YELLOW, pad=16),
+                 Part(later_name, brand.ARCHIVO_BLACK, 20, brand.INK, brand.WHITE, pad=18)]
         if later_time:
-            s.text(1.2, d, 934, 450, clock(later_time), BARLOW_X, 44, CREAM, align=6)
-    return s.card("upnext", d, music("upnext_bed.ogg"), background=lk.bg)
+            parts.append(Part(clock(later_time), brand.ARCHIVO_BLACK, 20, brand.WHITE, brand.PURPLE, pad=16))
+        brand.strip(s, 0.6, d, 58, 504, 46, parts, shadow=(6, 6, brand.PURPLE), slide=(600, 1000, 90))
+    picture = None
+    if art:
+        picture = Picture(art, 650, 236, 336, 189, layer=4, tilt=3, inset=2 if "/promos/" in art else 0)
+        picture.shadow(s, d)
+        brand.corner_badge(s, 0, d, lk.tint)
+    else:
+        w, h = brand.badge_size(96, "id")
+        brand.badge(s, 0, d, 818 - w / 2, 330 - h / 2, 96, lk.tint, kind="id", swing=(-14, 600))
+    return s.card("upnext", d, music("upnext_bed.ogg"), background=brand.INK_BG, picture=picture)
+
+
+def id_card(s, d, lk, tagline, em=150.0, top=96, name_at=None):
+    """The ID card (the guide's G|TV ID): the dotted purple ground and its bands, the badge swinging in, the
+    network's name on ink and a tagline on white. Returns where the tagline chip ends (its bottom)."""
+    brand.id_ground(s, d, lk.tint)
+    lk.dress(s, 0, d, layer=3, solid=True)
+    w, h = brand.badge_size(em, "id")
+    brand.badge(s, 0.1, d, W / 2 - w / 2, top, em, lk.tint, kind="id", swing=(-16, 500), layer=8)
+    y = name_at or top + h + 34
+    name_w = brand.measure(brand.NAME, brand.ANTON, 38, spacing=6.8) + 60
+    brand.strip(s, 0.45, d, W / 2 - name_w / 2, y, 56, [Part(brand.NAME, brand.ANTON, 38, brand.WHITE, brand.INK,
+                                                            pad=30, spacing=6.8)],
+                shadow=(6, 6, brand.YELLOW), slide=(450, 800, -60), layer=14)
+    if tagline:
+        tag_w = brand.measure(tagline, brand.ARCHIVO_BLACK, 19, spacing=1.2) + 36
+        brand.strip(s, 0.75, d, W / 2 - tag_w / 2, y + 66, 32, [Part(tagline, brand.ARCHIVO_BLACK, 19, brand.INK,
+                                                                     brand.WHITE, pad=18, spacing=1.2)],
+                    slide=(750, 1100, 60), layer=14)
+    return y + 98
 
 
 def station_id(now, good_morning=False, month=None):
-    """The bumper with the time laid over it. In a heritage month, every other hour's says so up top."""
+    """The station ID: the ID card with the time on its tagline, over the bumper's jingle. In a heritage month,
+    every other hour's names the month too."""
     d = 4.5
     s = Script()
-    top, color = ("GOOD MORNING!" if good_morning else "YOU'RE WATCHING"), CREAM
+    tagline = f"GOOD MORNING! WE'RE ON THE AIR · {clock(now)}" if good_morning else clock(now)
     if month in MONTH_LOOKS and not good_morning and now.hour % 2 == 0:
-        top, color = f"CELEBRATING {MONTH_LOOKS[month].title.upper()}", MONTH_LOOKS[month].accent
-    bottom = f"WE'RE ON THE AIR · {clock(now)}" if good_morning else clock(now)
-    s.text(1.2, 4.1, 512, 92, top, BARLOW_X, fit(top, BARLOW_X, 46, 940, spacing=8), color, spacing=8, shadow=3,
-           fade=(300, 250))
-    s.text(1.8, 4.1, 512, 505, bottom, ARCHIVO, 44 if good_morning else 62, MUSTARD, shadow=4, fade=(300, 250))
+        tagline = f"CELEBRATING {MONTH_LOOKS[month].title.upper()} · {clock(now)}"
+    id_card(s, d, look(month), tagline)
     path = s.write("stationid")
-    return Card(lavfi_url(path, d, video_source=ID_BACKGROUND, audio_source=ID_BACKGROUND), d, "id")
+    return Card(lavfi_url(path, d, background=brand.PURPLE_BG, audio_source=ID_BACKGROUND), d, "id")
 
 
 def sign_off(returns_at, season=None):
     d = 16.0
     lk = look(season)
     s = Script()
-    lk.dress(s, 0, d)
-    s.text(0.3, d, 512, 165, "THIS CONCLUDES", BARLOW_X, 54, lk.accent, spacing=6, fade=(600, 1200))
-    s.text(0.8, d, 512, 245, "OUR BROADCAST DAY", ARCHIVO, 74, lk.headline, shadow=6, shadow_color=lk.shadow,
-           slant=-0.12, fade=(600, 1200))
-    stripes(s, 1.2, d, 190, 305, 640, fade=(300, 1200), colors=lk.stripes)
-    s.text(3.0, d, 512, 405, f"{NETWORK} RETURNS AT {clock(returns_at)}", BARLOW_S, 42, fade=(600, 1200))
-    s.text(6.0, d, 512, 485, "GOOD NIGHT", ARCHIVO, 56, lk.accent, shadow=4, shadow_color=lk.shadow,
-           fade=(900, 1200))
-    return s.card("signoff", d, music("signoff.ogg"), background=lk.bg)
+    fade = (600, 1200)
+    brand.id_ground(s, d, lk.tint, fade=fade)
+    lk.dress(s, 0, d, layer=3, solid=True)
+    w, h = brand.badge_size(84, "id")
+    brand.badge(s, 0.2, d, W / 2 - w / 2, 44, 84, lk.tint, kind="id", swing=(-16, 600), fade=fade, layer=8)
+    line = "THIS CONCLUDES OUR BROADCAST DAY"
+    lw = brand.measure(line, brand.ANTON, 40) + 56
+    brand.strip(s, 0.8, d, W / 2 - lw / 2, 290, 62, [Part(line, brand.ANTON, 40, brand.WHITE, brand.INK, pad=28)],
+                shadow=(6, 6, brand.YELLOW), fade=fade, slide=(800, 1200, -60), layer=14)
+    back = f"{brand.NAME} RETURNS AT {clock(returns_at)}"
+    bw = brand.measure(back, brand.ARCHIVO_BLACK, 21) + 36
+    brand.strip(s, 3.0, d, W / 2 - bw / 2, 372, 36, [Part(back, brand.ARCHIVO_BLACK, 21, brand.INK, brand.WHITE,
+                                                          pad=18)], fade=fade, layer=14)
+    gw = brand.measure("GOOD NIGHT", brand.ANTON, 50) + 56
+    brand.strip(s, 6.0, d, W / 2 - gw / 2, 440, 70, [Part("GOOD NIGHT", brand.ANTON, 50, brand.INK, brand.YELLOW,
+                                                          pad=28)], shadow=(7, 7, brand.INK), fade=(900, 1200),
+                layer=14)
+    return s.card("signoff", d, music("signoff.ogg"), background=brand.PURPLE_BG)
 
 
 def stand_by(season=None):
     d = 32.0
     lk = look(season)
     s = Script()
-    lk.dress(s, 0, d)
-    s.text(0, d, 512, 160, "PLEASE", ARCHIVO, 70, lk.headline, shadow=5, shadow_color=lk.shadow, slant=-0.15,
-           fade=(400, 0))
-    s.text(0, d, 512, 250, "STAND BY", ARCHIVO, 112, lk.headline, shadow=6, shadow_color=lk.shadow, slant=-0.15,
-           fade=(400, 0))
-    stripes(s, 0, d, 190, 320, 640, slide=False, fade=(400, 0), colors=lk.stripes)
-    s.text(0, d, 512, 415, "WE'RE EXPERIENCING TECHNICAL DIFFICULTIES", BARLOW_S, 38, lk.accent, fade=(400, 0))
+    fade = (400, 0)
+    brand.id_ground(s, d, lk.tint, fade=fade, slide_in=False)
+    lk.dress(s, 0, d, layer=3, solid=True)
+    w, h = brand.badge_size(84, "id")
+    brand.badge(s, 0, d, W / 2 - w / 2, 44, 84, lk.tint, kind="id", fade=fade, layer=8)
+    pw = brand.measure("PLEASE STAND BY", brand.ANTON, 60) + 64
+    brand.strip(s, 0, d, W / 2 - pw / 2, 280, 84, [Part("PLEASE STAND BY", brand.ANTON, 60, brand.INK, brand.YELLOW,
+                                                       pad=32)], shadow=(7, 7, brand.INK), fade=fade, layer=14)
+    trouble = "WE'RE EXPERIENCING TECHNICAL DIFFICULTIES"
+    tw = brand.measure(trouble, brand.ARCHIVO_BLACK, 20) + 36
+    brand.strip(s, 0, d, W / 2 - tw / 2, 390, 36, [Part(trouble, brand.ARCHIVO_BLACK, 20, brand.INK, brand.WHITE,
+                                                        pad=18)], fade=fade, layer=14)
     # A slow blink, like a stuck slide in the master control room
+    resume = "PROGRAMMING WILL RESUME SHORTLY"
+    rw = brand.measure(resume, brand.ARCHIVO_BLACK, 20) + 36 + 30
     for i in range(0, int(d), 2):
-        s.text(i, i + 1, 512, 480, "●  PROGRAMMING WILL RESUME SHORTLY", BARLOW_B, 32, CREAM, fade=None)
-    return s.card("standby", d, music("standby_loop.ogg"), fade_out=False, background=lk.bg)
+        brand.strip(s, i, i + 1, W / 2 - rw / 2, 446, 36, [Part("●", brand.ARCHIVO_BLACK, 20, lk.tint, brand.INK, pad=10),
+                                                         Part(resume, brand.ARCHIVO_BLACK, 20, brand.WHITE, brand.INK,
+                                                              pad=8)], fade=None, layer=14)
+    return s.card("standby", d, music("standby_loop.ogg"), fade_out=False, background=brand.PURPLE_BG)
 
 
 # --- Program guide ---
 
-GUIDE_TOP, GUIDE_BOTTOM, ROW_H = 232, 548, 96
+GUIDE_TOP, GUIDE_BOTTOM, ROW_H, ROW_GAP = 128, 586, 80, 16   # a row and the gap after it: 96, as the old grid's rows
 GUIDE_SPEED = 15.0  # px/s
 GUIDE_ROWS = 10
 
 
 def guide(rows, now, season=None):
     """
-    A slow-scrolling listings grid in the style of the early-90s cable guide channels, in the browns of the
-    remote's listings on retrotv.local. rows: (start datetime or None, name, detail) tuples, the first (picked
-    out in mustard) the show starting right after this break.
+    A slow-scrolling listings grid in the style of the early-90s cable guide channels, its rows the guide's lineup
+    rows: the time, the show and its episode on leaning ink slabs, the first (the show starting right after this
+    break) on white. rows: (start datetime or None, name, detail) tuples.
     Returns None with nothing to list.
     """
     if not rows:
         return None
     rows = rows[:GUIDE_ROWS]
     hold = 6.0
-    distance = len(rows) * ROW_H
+    step = ROW_H + ROW_GAP
+    distance = len(rows) * step   # every row scrolls up and away, so the card runs as long as it always has
     scroll_end = hold + distance / GUIDE_SPEED
     d = round(scroll_end + 3.0, 2)
-    fade = (300, 400)
     lk = look(season)
     s = Script()
-    info_header(s, d, [(0, d, "Program Guide")], now, band=GUIDE_BAND, season=season)
-    lk.dress(s, 0, d, clip="\\clip(0,0,1024,168)", layer=1)   # over the band, under its type
-    stripe_band(s, 0, d, 198, colors=lk.stripes, x=60, width=904)
-
-    clip = f"\\clip(60,{GUIDE_TOP},964,{GUIDE_BOTTOM})"
-    cell_h = ROW_H - 8
+    brand.split(s, d)
+    lk.dress(s, 0, d, layer=2)
+    info_header(s, d, [(0, d, "Program Guide")], now, season=season)
+    clip = f"\\clip(0,{GUIDE_TOP - 8},{W},{GUIDE_BOTTOM + 10})"
+    x, width = 62, 880
     for i, (start, name, detail) in enumerate(rows):
-        y0 = GUIDE_TOP + i * ROW_H
-        y1 = y0 - distance
+        y0 = GUIDE_TOP + i * step
+        first = i == 0
+        fill, ink, time_c, detail_c = ((brand.WHITE, brand.INK, brand.PURPLE, brand.PURPLE) if first else
+                                       (brand.INK, brand.WHITE, brand.YELLOW, brand.SILVER))
 
-        def mv(x, dy=0):
-            return f"\\move({x},{y0 + dy},{x},{y1 + dy},{int(hold * 1000)},{int(scroll_end * 1000)}){clip}"
-        # The time in the channel column (with the main channel's mustard edge), the show in a cell beside it
-        s.shape(0, d, 60, y0, rounded(186, cell_h, 8), GUIDE_TIME, extra=mv(60), fade=fade)
-        s.shape(0, d, 242, y0, rect(4, cell_h), MUSTARD, extra=mv(242), fade=fade, layer=2)
-        s.shape(0, d, 254, y0, rounded(710, cell_h, 8), MUSTARD if i == 0 else GUIDE_EDGE, extra=mv(254), fade=fade)
-        s.shape(0, d, 256, y0 + 2, rounded(706, cell_h - 4, 7), GUIDE_NOW if i == 0 else GUIDE_CELL,
-                extra=mv(256, 2), fade=fade, layer=2)
-        s.raw(0, d, f"\\an5\\fn{BARLOW_X}\\fs44\\c{MUSTARD}\\bord0\\shad2\\4c{BLACK}\\fad({fade[0]},{fade[1]})"
-              + mv(150, cell_h // 2), esc(clock(start) if start else ""), layer=3)
-        name = clip_text(name, 40)
-        s.raw(0, d, f"\\an4\\fn{BARLOW_X}\\fs{fit(name, BARLOW_X, 44, 660)}\\c{CREAM}\\bord0\\shad2"
-              f"\\4c{BLACK}\\fad({fade[0]},{fade[1]})" + mv(276, 30), esc(name), layer=3)
+        def mv(px, py):
+            return (f"\\move({px:.1f},{py:.1f},{px:.1f},{py - distance:.1f},{int(hold * 1000)},{int(scroll_end * 1000)})"
+                    + clip)
+        lean = ROW_H * brand.SKEW
+        brand.shape(s, 0, d, 0, 0, brand.para(width, ROW_H), brand.INK, layer=3, extra=mv(x - lean / 2 + 7, y0 + 7))
+        brand.shape(s, 0, d, 0, 0, brand.para(width, ROW_H), fill, layer=4, extra=mv(x - lean / 2, y0))
+        when = clock(start) if start else ""
+        _row_words(s, d, x + 22, y0 + ROW_H / 2, when, brand.ARCHIVO_BLACK, 22, time_c, mv)
+        name = brand.clip(name.upper(), brand.ANTON, 32, 640)
+        _row_words(s, d, x + 170, y0 + (27 if detail else ROW_H / 2), name, brand.ANTON, 32, ink, mv)
         if detail:
-            s.raw(0, d, f"\\an4\\fn{BARLOW_S}\\fs31\\c{TAN}\\bord0\\shad0\\fad({fade[0]},{fade[1]})" + mv(278, 66),
-                  esc(clip_text(detail, 52)), layer=3)
-    return s.card("guide", d, music("guide_bed.ogg"), loop=True, card_kind="guide")
+            _row_words(s, d, x + 172, y0 + 58, brand.clip(detail.upper(), brand.ARCHIVO, 19, 640), brand.ARCHIVO, 19,
+                       detail_c, mv)
+    return s.card("guide", d, music("guide_bed.ogg"), loop=True, card_kind="guide", background=brand.INK_BG)
+
+
+def _row_words(s, d, x, y, text, font, em, color, mv, bold=False):
+    """Words on a scrolling row: brand.words' placing, moved with the row by mv(x, top)."""
+    top = y + brand.cap_height(font, em) / 2 - brand.ascent(font, em)
+    s.raw(0, d, f"\\an7{mv(x, top)}\\fn{font}\\fs{brand.fs(font, em)}\\b{1 if bold else 0}\\c{color}\\bord0\\shad0"
+                f"\\fad(250,250)", esc(text), layer=6)
 
 
 # --- Local weather ---
@@ -660,7 +760,6 @@ WMO = {
     85: ("Snow Showers", "snow"), 86: ("Snow Showers", "snow"),
     95: ("T'Storms", "storm"), 96: ("T'Storms", "storm"), 99: ("T'Storms", "storm"),
 }
-WEATHER_CRAWL_WIDTH = 0.6          # the crawl's real width, as a share of text_width's estimate (a little under)
 WEATHER_LABEL_SECONDS = 30 * 60    # older than this, the weather card says what time it's from
 COMPASS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
 
@@ -669,45 +768,46 @@ def _disc(s, start, end, cx, cy, r, color, layer, fade):
     s.shape(start, end, cx - r, cy - r, circle(r), color, fade=fade, layer=layer)
 
 
-def _icon(s, start, end, kind, x, y, scale=1.0, night=False):
-    """Simple weather icons drawn with ASS vector shapes, centred on x, y."""
+def _icon(s, start, end, kind, x, y, scale=1.0, night=False, cutout=None, base=0):
+    """Simple weather icons drawn with ASS vector shapes, centred on x, y, in the G|TV colours. cutout: the colour
+    behind the icon (the moon's crescent is cut with it). base: added to every layer."""
     def sc(v):
         return round(v * scale)
     fade = (300, 300)
-    sun_c, moon_c, cloud_c, dark_cloud = "&H0030C8FF&", "&H00B8E8F4&", "&H00E8E4E0&", "&H00A09890&"
+    sun_c, rays_c, moon_c, cloud_c, dark_cloud = brand.YELLOW, brand.ORANGE, "&H00C8F0FF&", brand.WHITE, "&H00B0A8A4&"
     if kind in ("sun", "partly"):
         cx, cy = (x, y) if kind == "sun" else (x + sc(18), y - sc(18))
         r = sc(34) if kind == "sun" else sc(28)
         if night:
-            # A crescent: the moon with a panel-coloured disc over one side
-            _disc(s, start, end, cx, cy, r, moon_c, 3, fade)
-            _disc(s, start, end, cx + sc(14), cy - sc(10), r, PANEL, 4, fade)
+            # A crescent: the moon with a disc of the background over one side
+            _disc(s, start, end, cx, cy, r, moon_c, base + 3, fade)
+            _disc(s, start, end, cx + sc(14), cy - sc(10), r, cutout or brand.INK, base + 4, fade)
         else:
             for a in range(0, 360, 45):
-                s.shape(start, end, cx, cy - r - sc(11), rect(sc(8), sc(10)), "&H0020B4FF&", fade=fade,
-                        layer=3, align=5, extra=f"\\org({cx},{cy})\\frz{a}")
-            _disc(s, start, end, cx, cy, r, sun_c, 4, fade)
+                s.shape(start, end, cx, cy - r - sc(11), rect(sc(8), sc(10)), rays_c, fade=fade,
+                        layer=base + 3, align=5, extra=f"\\org({cx},{cy})\\frz{a}")
+            _disc(s, start, end, cx, cy, r, sun_c, base + 4, fade)
     if kind in ("partly", "cloud", "rain", "snow", "storm"):
         c = dark_cloud if kind in ("rain", "storm", "snow") else cloud_c
         ox, oy = x - sc(4), y + sc(6)
         for dx, dy, r in ((-24, 6, 20), (0, -8, 28), (26, 4, 22)):
-            _disc(s, start, end, ox + sc(dx), oy + sc(dy), sc(r), c, 5, fade)
-        s.shape(start, end, ox - sc(44), oy + sc(4), rect(sc(92), sc(22)), c, fade=fade, layer=5)
+            _disc(s, start, end, ox + sc(dx), oy + sc(dy), sc(r), c, base + 5, fade)
+        s.shape(start, end, ox - sc(44), oy + sc(4), rect(sc(92), sc(22)), c, fade=fade, layer=base + 5)
     if kind == "rain":
         drop = f"m {sc(8)} 0 l {sc(14)} 0 l {sc(6)} {sc(22)} l 0 {sc(22)}"
         for dx in (-26, -2, 22):
-            s.shape(start, end, x + sc(dx) - sc(4), y + sc(36), drop, "&H00F0A040&", fade=fade, layer=5)
+            s.shape(start, end, x + sc(dx) - sc(4), y + sc(36), drop, brand.BLUE, fade=fade, layer=base + 5)
     if kind == "snow":
         for dx in (-26, -2, 22):
-            _disc(s, start, end, x + sc(dx), y + sc(49), sc(5), WHITE, 5, fade)
+            _disc(s, start, end, x + sc(dx), y + sc(49), sc(5), WHITE, base + 5, fade)
     if kind == "storm":
         bolt = (f"m {sc(12)} 0 l {sc(26)} 0 l {sc(16)} {sc(14)} l {sc(26)} {sc(14)} l {sc(2)} {sc(40)} "
                 f"l {sc(10)} {sc(20)} l 0 {sc(20)}")
-        s.shape(start, end, x - sc(10), y + sc(30), bolt, "&H0020E0FF&", fade=fade, layer=6)
+        s.shape(start, end, x - sc(10), y + sc(30), bolt, brand.YELLOW, fade=fade, layer=base + 6)
     if kind == "fog":
         for i, dy in enumerate((-18, 0, 18)):
             s.shape(start, end, x - sc(44) + sc(i * 6), y + sc(dy), rect(sc(80), sc(9)), "&H00C8C0B8&",
-                    fade=fade, layer=5)
+                    fade=fade, layer=base + 5)
 
 
 def weather_as_of(data):
@@ -718,8 +818,47 @@ def weather_as_of(data):
     return None
 
 
+def _value_rows(s, a, b, rows, x=690, y=136, w=270, h=46, gap=10, label_em=17.0, value_em=27.0):
+    """Label and value rows on the purple side, like the guide's lineup rows: the label in yellow, the value in
+    white, on leaning ink slabs."""
+    for i, (label, value) in enumerate(rows):
+        top = y + i * (h + gap)
+        brand.slab(s, a, b, x, top, w, h, brand.INK, shadow=(6, 6, brand.INK), layer=4, fade=(300, 300))
+        brand.words(s, a, b, x + 18, top + h / 2, label.upper(), brand.ARCHIVO_BLACK, label_em, brand.YELLOW,
+                    fade=(300, 300), layer=6)
+        brand.words(s, a, b, x + w - 18, top + h / 2, value, brand.ANTON, value_em, brand.WHITE, align="right",
+                    fade=(300, 300), layer=6)
+
+
+def _crawl_bar(s, d, label, crawl, tag=None, accent=brand.ORANGE, fade=(300, 400)):
+    """The ticker along the bottom, as the guide's score ticker draws it: a yellow rule, the label on the accent,
+    the crawl on ink, and tag (the temperature, say) in purple at the right end."""
+    top, h = 552, 48
+    brand.shape(s, 0, d, 0, top - 4, rect(W, 4), brand.YELLOW, fade=fade, layer=6)
+    brand.shape(s, 0, d, 0, top, rect(W, h), brand.INK, fade=fade, layer=6)
+    label_w = brand.measure(label, brand.ANTON, 26) + 40
+    brand.shape(s, 0, d, 0, top, rect(label_w, h), accent, fade=fade, layer=8)
+    brand.words(s, 0, d, 20, top + h / 2, label, brand.ANTON, 26, brand.INK, fade=fade, layer=9)
+    right = W
+    if tag:
+        tag_w = brand.measure(tag, brand.ANTON, 28) + 44
+        right = W - tag_w
+        brand.shape(s, 0, d, right, top, rect(tag_w, h), brand.PURPLE, fade=fade, layer=8)
+        brand.words(s, 0, d, right + 22, top + h / 2, tag, brand.ANTON, 28, brand.WHITE, fade=fade, layer=9)
+    em, speed = 22.0, 120.0
+    one = crawl
+    while brand.measure(crawl, brand.ARCHIVO_BLACK, em) < speed * d - 1000:   # round again rather than leave it empty
+        crawl += "   ●   " + one
+    width = brand.measure(crawl, brand.ARCHIVO_BLACK, em)
+    end_x = min(right - speed * d, -width)   # the whole line crosses in time
+    y_top = top + h / 2 + brand.cap_height(brand.ARCHIVO_BLACK, em) / 2 - brand.ascent(brand.ARCHIVO_BLACK, em)
+    s.raw(0, d, f"\\an7\\move({right - 10:.0f},{y_top:.1f},{end_x:.0f},{y_top:.1f})\\clip({label_w:.0f},{top},{right:.0f},{top + h})"
+                f"\\fn{brand.ARCHIVO_BLACK}\\fs{brand.fs(brand.ARCHIVO_BLACK, em)}\\c{brand.WHITE}\\bord0\\shad0"
+                f"\\fad({fade[0]},{fade[1]})", esc(crawl), layer=7)
+
+
 def weather(data, place, now=None, season=None):
-    """Three pages (current conditions, extended forecast, almanac) with a crawl along the bottom. Today is
+    """Three pages (current conditions, the next three days, the almanac) with a crawl along the bottom. Today is
     the forecast day dated `now` (the time the card airs), never just the first one in the data; None when
     the data has no forecast for today. The backup source has no UV index, so that line is left off."""
     now = now or datetime.datetime.now()
@@ -745,38 +884,33 @@ def weather(data, place, now=None, season=None):
 
     page, pages = 21.0, 3   # 63 s, inside the 64 s bed
     d = page * pages
+    lk = look(season)
     s = Script()
     fade = (300, 300)
-    frame_fade = (300, 400)
-
-    # The frame (header, panel and crawl bar) stays up the whole time
+    brand.split(s, d)
+    lk.dress(s, 0, d, layer=2)
     info_header(s, d, [(0, page, f"Conditions at {as_of}" if as_of else "Current Conditions"), (page, 2 * page, "Extended Forecast"),
-                       (2 * page, 3 * page, "Almanac")], now, band=HEADER, kicker=f"{CHANNEL} · LOCAL WEATHER",
-                season=season)
-    s.shape(0, d, 60, 186, rect(904, 292), PANEL, fade=frame_fade, layer=0)
-    s.shape(0, d, 0, 488, rect(W, 112), TICKER, fade=frame_fade, layer=0)
+                       (2 * page, 3 * page, "Almanac")], now, kicker=f"{CHANNEL} WEATHER", season=season)
 
     # Page 1: current conditions
     a, b = 0.0, page
-    s.text(a, b, 100, 220, place, BARLOW_B, 38, WHITE, align=4, fade=fade, layer=3)
-    s.text(a, b, 96, 320, f"{temp}°", ARCHIVO, 132, WHITE, align=4, shadow=4, shadow_color=BLACK,
-           fade=fade, layer=3)
-    s.text(a, b, 100, 432, cond, BARLOW_X, 46, YELLOW, align=4, fade=fade, layer=3)
-    _icon(s, a, b, icon, 420, 315, 1.25, night)
+    brand.words(s, a, b, 60, 138, place.upper(), brand.ARCHIVO_BLACK, 22, brand.WHITE, fade=fade)
+    brand.words(s, a, b, 50, 262, f"{temp}°", brand.ANTON, 170, brand.WHITE, shadow=(8, 8, brand.PURPLE), fade=fade)
+    brand.strip(s, a, b, 60, 380, 50, [Part(cond.upper(), brand.ANTON, 34, brand.INK, brand.YELLOW, pad=20)],
+                shadow=(6, 6, brand.PURPLE), fade=fade)
+    _icon(s, a, b, icon, 440, 250, 1.35, night, base=2)
     details = [
         ("Humidity", f"{humidity}%"),
         ("Dewpoint", f"{round(cur['dew_point_2m'])}°"),
         ("Feels Like", f"{round(cur['apparent_temperature'])}°"),
-        ("Wind", wind),
-        ("Pressure", pressure),
+        ("Wind", wind.upper()),
+        ("Pressure", pressure.upper()),
         ("Rain Today", f"{rain_today}%"),
     ]
-    for i, (label, value) in enumerate(details):
-        y = 222 + i * 44
-        s.text(a, b, 560, y, label, BARLOW_B, 36, SKY, align=4, fade=fade, layer=3)
-        s.text(a, b, 930, y, value, BARLOW_X, 38, WHITE, align=6, fade=fade, layer=3)
+    _value_rows(s, a, b, details, x=690, w=272)
+    brand.words(s, a, b, 60, 470, f"TODAY {today_hi}° / {today_lo}°", brand.ANTON, 34, brand.YELLOW, fade=fade)
 
-    # Page 2: extended forecast for the next three days
+    # Page 2: the next three days, as the guide's market cards: the day on yellow over an ink body
     a, b = page, 2 * page
     for col, i in enumerate(range(t + 1, t + 4)):
         try:
@@ -786,44 +920,45 @@ def weather(data, place, now=None, season=None):
             pop = daily["precipitation_probability_max"][i]
         except (KeyError, IndexError, TypeError, ValueError):
             continue
-        x = 212 + col * 300
-        s.text(a, b, x, 220, day.strftime("%a").upper(), BARLOW_X, 50, YELLOW, fade=fade, layer=3)
-        _icon(s, a, b, dicon, x, 300, 0.95)
-        s.text(a, b, x, 372, dcond, BARLOW_B, fit(dcond, BARLOW_B, 36, 270), WHITE, fade=fade, layer=3)
-        s.text(a, b, x - 8, 420, f"{hi}°", BARLOW_X, 44, WHITE, align=6, fade=fade, layer=3)
-        s.text(a, b, x + 8, 420, f"{lo}°", BARLOW_X, 44, SKY, align=4, fade=fade, layer=3)
-        s.text(a, b, x, 460, f"Rain {pop}%", BARLOW_S, 30, SKY, fade=fade, layer=3)
+        x, w = 58 + col * 312, 284
+        brand.shape(s, a, b, x + 10, 136, rect(w, 386), lk.tint, fade=fade, layer=3)
+        brand.shape(s, a, b, x, 126, rect(w, 386), brand.PANEL, fade=fade, layer=4)
+        brand.shape(s, a, b, x, 126, rect(w, 70), brand.YELLOW, fade=fade, layer=5)
+        brand.words(s, a, b, x + 20, 161, day.strftime("%a").upper(), brand.ANTON, 46, brand.INK, fade=fade, layer=6)
+        brand.words(s, a, b, x + w - 20, 161, day.strftime("%b %-d").upper(), brand.ARCHIVO_BLACK, 18, brand.INK,
+                    align="right", fade=fade, layer=6)
+        _icon(s, a, b, dicon, x + w / 2, 262, 1.0, cutout=brand.PANEL, base=3)
+        brand.words(s, a, b, x + w / 2, 352, brand.clip(dcond.upper(), brand.ARCHIVO_BLACK, 20, w - 30),
+                    brand.ARCHIVO_BLACK, 20, brand.WHITE, align="center", fade=fade, layer=6)
+        brand.words(s, a, b, x + w / 2 - 10, 412, f"{hi}°", brand.ANTON, 56, brand.WHITE, align="right", fade=fade,
+                    layer=6)
+        brand.words(s, a, b, x + w / 2 + 10, 412, f"{lo}°", brand.ANTON, 56, brand.SILVER, fade=fade, layer=6)
+        brand.strip(s, a, b, x + 22, 458, 34, [Part(f"RAIN {pop}%", brand.ARCHIVO_BLACK, 18, brand.INK, lk.tint,
+                                                    pad=14)], fade=fade, layer=6)
 
-    # Page 3: almanac
+    # Page 3: the almanac
     a, b = 2 * page, 3 * page
-    almanac = [
-        ("Sunrise", sunrise), ("Sunset", sunset), ("Today's High", f"{today_hi}°"),
-        ("Tonight's Low", f"{today_lo}°"), ("UV Index", f"{round(uv)}" if uv is not None else None),
-        ("Chance of Rain", f"{rain_today}%"),
-    ]
-    almanac = [row for row in almanac if row[1] is not None]
-    for i, (label, value) in enumerate(almanac):
-        col, row = divmod(i, 3)
-        x = 100 + col * 440
-        y = 236 + row * 80
-        s.text(a, b, x, y, label, BARLOW_B, 38, SKY, align=4, fade=fade, layer=3)
-        s.text(a, b, x + 380, y, value, BARLOW_X, 42, WHITE, align=6, fade=fade, layer=3)
+    for i, (label, value, fill) in enumerate((("SUNRISE", sunrise, lk.tint), ("SUNSET", sunset, brand.YELLOW))):
+        brand.strip(s, a, b, 60 + i * 290, 150, 54, [Part(label, brand.ANTON, 30, brand.INK, fill, pad=16),
+                                                     Part(value, brand.ARCHIVO_BLACK, 24, brand.INK, brand.WHITE, pad=18)],
+                    shadow=(6, 6, brand.PURPLE), fade=fade)
+    brand.words(s, a, b, 60, 262, "HIGH", brand.ANTON, 30, brand.YELLOW, fade=fade)
+    brand.words(s, a, b, 56, 340, f"{today_hi}°", brand.ANTON, 110, brand.WHITE, shadow=(6, 6, brand.PURPLE), fade=fade)
+    brand.words(s, a, b, 300, 262, "LOW", brand.ANTON, 30, brand.YELLOW, fade=fade)
+    brand.words(s, a, b, 296, 340, f"{today_lo}°", brand.ANTON, 110, brand.SILVER, shadow=(6, 6, brand.PURPLE),
+                fade=fade)
+    almanac = [("Chance of Rain", f"{rain_today}%")]
+    if uv is not None:
+        almanac.insert(0, ("UV Index", f"{round(uv)}"))
+    almanac.append(("Humidity", f"{humidity}%"))
+    _value_rows(s, a, b, almanac, x=690, y=160, w=272)
 
     # The crawl
-    crawl = (f"{place}  ●  {f'At {as_of}' if as_of else 'Now'} {temp}°F {cond}  ●  Humidity {humidity}%  ●  Wind {wind}"
-             f"  ●  Today: High {today_hi}°, Low {today_lo}°  ●  Chance of rain {rain_today}%"
-             f"  ●  Sunset {sunset}")
-    one = crawl
-
-    def crawl_width(text):
-        return text_width(text, BARLOW_S, 38) * WEATHER_CRAWL_WIDTH
-
-    while crawl_width(crawl) < 120.0 * d - 1000:  # round again rather than leave the bar empty
-        crawl += "  ●  " + one
-    end_x = min(1000 - 120.0 * d, -crawl_width(crawl))  # the whole line crosses in time
-    s.raw(0, d, f"\\an4\\move(1010,544,{end_x:.0f},544)\\clip(0,488,{W},{H})\\fn{BARLOW_S}\\fs38"
-                f"\\c{WHITE}\\bord0\\shad0\\fad({frame_fade[0]},{frame_fade[1]})", esc(crawl), layer=3)
-    return s.card("weather", d, music("weather_bed.ogg"), background=WEATHER_BACKGROUND, card_kind="weather")
+    crawl = (f"{place.upper()}   ●   {f'AT {as_of}' if as_of else 'NOW'} {temp}°F {cond.upper()}   ●   HUMIDITY {humidity}%"
+             f"   ●   WIND {wind.upper()}   ●   TODAY: HIGH {today_hi}°, LOW {today_lo}°   ●   CHANCE OF RAIN {rain_today}%"
+             f"   ●   SUNSET {sunset}")
+    _crawl_bar(s, d, "WEATHER", crawl, tag=f"{temp}°F", accent=lk.tint)
+    return s.card("weather", d, music("weather_bed.ogg"), background=brand.INK_BG, card_kind="weather")
 
 
 # --- Titles ---

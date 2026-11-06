@@ -21,10 +21,10 @@ import random
 import re
 
 from retrotv import health
-from retrotv.cards import BARLOW_S, CHANNEL, WHITE, Card, Script, esc, lavfi_url, music
+from retrotv import brand
+from retrotv.cards import CHANNEL, WHITE, Script, esc, music
 from retrotv.jsonio import get_json, write_json
 from retrotv.paths import DATA_DIR
-from retrotv.screens import wrap
 
 logger = logging.getLogger("RetroTV")
 
@@ -39,7 +39,7 @@ SHOW_RIFFS_FILE = os.path.join(DATA_DIR, "show_riffs.json")   # riffs on the sho
 LEVELS = ("clean", "cheeky", "raunchy")
 BEDS = ("blurb_lofi1.ogg", "blurb_lofi2.ogg", "blurb_vapor1.ogg", "blurb_vapor2.ogg")
 MAX_CHARS = 220          # anything longer doesn't read as a bump
-TEXT_SIZE, KICKER_SIZE, SIGN_SIZE = 55, 44, 37   # the words, the kicker above them, the g|tv at the end
+TEXT_SIZE, KICKER_SIZE, SIGN_SIZE = 32, 26, 24   # Archivo ems: the words, the kicker above them, the g|tv at the end
 GREY = "&H00A8A8A8&"     # the kicker, a step behind the words
 # What can air at each level: (kicker, source, weight). "ours" is retrotv/blurbs.txt with its own kickers; the
 # kicker of a fact or a headline (None) comes from EXTRAS_FILE, see KICKERS
@@ -250,10 +250,12 @@ def _remember(seen):
 
 def _beat(s, start, text, color, size):
     """One beat: the words centred, lowercase, held long enough to read. Returns when the next one starts."""
-    lines = wrap(text.lower(), BARLOW_S, size, 780, max_lines=4)
+    lines = brand.lines(text.lower(), brand.ARCHIVO, size, 780)
+    if len(lines) > 4:
+        lines = lines[:3] + [brand.clip(" ".join(lines[3:]), brand.ARCHIVO, size, 780)]
     seconds = min(6.0, max(2.2, 1.4 + 0.33 * len(text.split())))
-    s.raw(start, start + seconds, f"\\an5\\pos(512,300)\\fn{BARLOW_S}\\fs{size}\\c{color}\\bord0\\shad0"
-                                  f"\\fsp1\\fad(120,150)", "\\N".join(esc(l) for l in lines))
+    s.raw(start, start + seconds, f"\\an5\\pos(512,300)\\fn{brand.ARCHIVO}\\fs{brand.fs(brand.ARCHIVO, size)}"
+                                  f"\\c{color}\\bord0\\shad0\\fsp1\\fad(120,150)", "\\N".join(esc(l) for l in lines))
     return start + seconds + 0.35
 
 
@@ -280,7 +282,8 @@ def card(kicker, beats):
         t = _beat(s, t, kicker, GREY, KICKER_SIZE)
     for text in beats:
         t = _beat(s, t, text, WHITE, TEXT_SIZE)
-    s.text(t, t + 1.8, 512, 300, CHANNEL.lower(), BARLOW_S, SIGN_SIZE, WHITE, spacing=2, fade=(120, 300))
+    brand.words(s, t, t + 1.8, 512, 300, CHANNEL.lower(), brand.ARCHIVO, SIGN_SIZE, WHITE, align="center", bold=True,
+                spacing=2, fade=(120, 300))
     d = round(t + 2.1, 2)
     beds = [b for b in BEDS if os.path.exists(music(b))]
     bed = music(random.choice(beds)) if beds else None

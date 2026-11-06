@@ -7,9 +7,9 @@
 <title>G|TV Watch</title>
 <link rel="stylesheet" href="/common.css">
 <style>
-/* The station live (served by retrotv/remote.py from retrotv/live.py's stream): one long MP4, fed to the player
-   through Media Source by the script below. No player library. The bar fades out while the picture plays and comes
-   back on any touch or move. */
+/* The station live, from MediaMTX (retrotv/live.py) as HLS, played by hls.js (MediaMTX's own copy) or,
+   where the browser plays HLS itself (Safari), natively. The bar fades out while the picture plays and comes back on
+   any touch or move. */
 html, body { margin: 0; height: 100%; background: #000; }
 body { color: var(--cream); font: 600 19px/1.3 "Barlow Condensed", sans-serif; overflow: hidden; }
 video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
@@ -36,13 +36,11 @@ a { color: var(--sky); }
   <a href="/">Remote</a>
 </div>
 <script>
+// MediaMTX's HLS server on the Pi (MEDIAMTX_HLS_PORT): the stream, and the hls.js it ships with
+const SERVER = `${location.protocol}//${location.hostname}:8888/gtv/`;
 const tv = document.getElementById("tv"), bar = document.getElementById("bar"), note = document.getElementById("status");
 const sound = document.getElementById("sound"), full = document.getElementById("full");
-const BEHIND = 1.5;   // seconds the picture plays behind the newest it has: the stream comes a second at a time
-let retry = null, lastTime = -1, stuckSince = 0, hideTimer = null, misses = 0, session = 0, reader = null, url = null;
-// Fed through Media Source (MSE) where the browser has it: Firefox, left to play the endless MP4 download by itself,
-// shows only a few frames a second. Chrome plays either way. The plain download is the fallback
-let useMSE = "MediaSource" in window;
+let hls = null, retry = null, misses = 0, lastTime = -1, stuckSince = 0, hideTimer = null;
 
 function say(text, live) { note.textContent = text; note.className = live ? "live" : ""; }
 
@@ -52,21 +50,32 @@ function tune() {
   say("Tuning in…");
   lastTime = -1;
   stuckSince = 0;
-  const me = ++session;
-  if (url) URL.revokeObjectURL(url);
-  url = null;
-  if (useMSE) {
-    feed(me).catch(() => { if (me === session) lost(); });
+  if (hls) { hls.destroy(); hls = null; }
+  const url = SERVER + "index.m3u8";
+  if (window.Hls && Hls.isSupported()) {
+    // About 5 s behind the panel, with room to spare: smooth beats close to live here (Dan's call, 2026-11-05).
+    // Low-latency, under a second behind, Firefox stuttered now and then where Chrome didn't
+    hls = new Hls({ lowLatencyMode: false, liveSyncDuration: 4.5, liveMaxLatencyDuration: 10, maxBufferLength: 10,
+                    backBufferLength: 10 });
+    hls.on(Hls.Events.ERROR, (event, data) => {
+      if (!data.fatal) return;
+      if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
+      lost();   // the stream stopped, or the Pi is restarting it
+    });
+    hls.loadSource(url);
+    hls.attachMedia(tv);
+  } else if (tv.canPlayType("application/vnd.apple.mpegurl")) {
+    tv.src = url;   // Safari plays HLS by itself
   } else {
-    tv.src = "/live.mp4?" + Date.now();   // one long response; a fresh one picks up the stream as it is now
-    tv.play().catch(() => {});
+    say("This browser can't play the stream.");
+    return;
   }
+  tv.play().catch(() => {});
 }
 
 function lost() {
   if (retry) return;
-  session++;   // stops the feed that was running
-  if (reader) { reader.cancel().catch(() => {}); reader = null; }
+  if (hls) { hls.destroy(); hls = null; }
   misses += 1;
   if (misses > 3) {   // not a blip: say so, and try less often
     note.innerHTML = 'No signal. The <a href="/health">health page</a> may say why. Trying again…';
@@ -77,88 +86,16 @@ function lost() {
   }
 }
 
-function join(parts) {
-  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
-  let at = 0;
-  for (const p of parts) { out.set(p, at); at += p.length; }
-  return out;
-}
-function find(d, text) {   // where a four-letter box type first appears
-  outer: for (let i = 0; i + 4 <= d.length; i++) {
-    for (let j = 0; j < 4; j++) if (d[i + j] !== text.charCodeAt(j)) continue outer;
-    return i;
-  }
-  return -1;
-}
-const u32 = (d, i) => ((d[i] << 24) | (d[i + 1] << 16) | (d[i + 2] << 8) | d[i + 3]) >>> 0;
-const hex = n => n.toString(16).padStart(2, "0");
-
-async function feed(me) {
-  const ms = new MediaSource();
-  url = tv.src = URL.createObjectURL(ms);
-  await new Promise(r => ms.addEventListener("sourceopen", r, { once: true }));
-  const resp = await fetch("/live.mp4?" + Date.now(), { cache: "no-store" });
-  if (!resp.ok || !resp.body || me !== session) throw new Error("no stream");
-  reader = resp.body.getReader();
-  let head = [], sb = null, queued = [];
-  const pump = () => {
-    if (!sb || sb.updating || me !== session) return;
-    const b = tv.buffered;
-    if (b.length && tv.currentTime - b.start(0) > 30) { sb.remove(b.start(0), tv.currentTime - 10); return; }   // keep memory small
-    if (!queued.length) return;
-    const data = join(queued);
-    queued = [];
-    try {
-      sb.appendBuffer(data);
-    } catch (e) {
-      if (e.name !== "QuotaExceededError") throw e;
-      queued.unshift(data);   // full: the next remove makes room
-    }
-  };
-  while (me === session) {
-    const { value, done } = await reader.read();
-    if (done || me !== session) break;
-    if (sb) {
-      queued.push(value);
-    } else {
-      head.push(value);
-      const all = join(head), moov = find(all, "moov");
-      if (moov < 4 || all.length < moov - 4 + u32(all, moov - 4)) continue;   // the whole header first
-      const avc = find(all, "avcC");   // the picture's profile and level, for the codec string
-      const type = avc < 0 ? "" : `video/mp4; codecs="avc1.${hex(all[avc + 5])}${hex(all[avc + 6])}${hex(all[avc + 7])},mp4a.40.2"`;
-      if (!type || !MediaSource.isTypeSupported(type)) { useMSE = false; reader.cancel().catch(() => {}); tune(); return; }
-      sb = ms.addSourceBuffer(type);
-      sb.addEventListener("updateend", () => { catchUp(); pump(); });
-      queued.push(all);
-    }
-    pump();
-  }
-  if (me === session) lost();   // the stream ended
-}
-
-function catchUp() {
-  // Start, or catch up after falling well behind (a tab left in the background), BEHIND seconds from the newest
-  const b = tv.buffered;
-  if (!b.length) return;
-  const end = b.end(b.length - 1), start = b.start(b.length - 1);
-  if (end - start < BEHIND) return;   // not enough yet
-  if (tv.currentTime < start || end - tv.currentTime > BEHIND + 3) tv.currentTime = end - BEHIND;
-  if (tv.paused) tv.play().catch(() => {});
-}
-
 tv.addEventListener("playing", () => { misses = 0; say("Live", true); });
 tv.addEventListener("error", () => lost());
 tv.addEventListener("ended", () => lost());
 
 setInterval(() => {
-  // The plain download: catch up only when well behind, keeping a couple of seconds in hand
-  const b = tv.buffered;
-  if (!useMSE && b.length && b.end(b.length - 1) - tv.currentTime > 8) tv.currentTime = b.end(b.length - 1) - 2;
-  // A stream that stops moving without an error (the station restarting, say): start over
+  // A picture that stops moving without an error (the station restarting, say): tune in afresh
   if (tv.paused || retry) return;
   if (tv.currentTime !== lastTime) { lastTime = tv.currentTime; stuckSince = 0; return; }
   if (!stuckSince) stuckSince = Date.now();
-  else if (Date.now() - stuckSince > 10000) { tv.removeAttribute("src"); tv.load(); lost(); }
+  else if (Date.now() - stuckSince > 10000) lost();
 }, 2000);
 
 function setSound(on) {
@@ -189,9 +126,14 @@ function wake() {
   hideTimer = setTimeout(() => { if (!tv.paused && note.className === "live") bar.classList.add("hide"); }, 3500);
 }
 ["mousemove", "touchstart", "keydown"].forEach(e => document.addEventListener(e, wake, { passive: true }));
-
-tune();
 wake();
+
+// hls.js comes from MediaMTX too, so the page works whenever the stream does
+const script = document.createElement("script");
+script.src = SERVER + "hls.min.js";
+script.onload = tune;
+script.onerror = () => (tv.canPlayType("application/vnd.apple.mpegurl") ? tune() : lost());
+document.head.appendChild(script);
 </script>
 </body>
 </html>

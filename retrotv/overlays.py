@@ -7,10 +7,12 @@ import random
 
 from retrotv import cards
 from retrotv import art as posters
-from retrotv.config import LOGO_BUG_FILE, PROGRESS_BAR, PROGRESS_COLOR
+from retrotv.config import CRT, CRT_SHADER, FRAME_W, LOGO_BUG_FILE, PROGRESS_BAR, PROGRESS_COLOR
 
 
-ART_X, ART_BOTTOM, ART_SLIDE = 14, 153, 260   # a lower third's poster: above the label, resting on the bar (342x200)
+K = FRAME_W / 342   # the overlays' pixel sizes are for the CRT's 342x200 picture: this scales them to the frame
+# A lower third's poster: above the label, resting on the bar
+ART_X, ART_BOTTOM, ART_SLIDE = round(14 * K), round(153 * K), round(260 * K)
 
 
 def glitch_filters(t0, kind):
@@ -53,21 +55,26 @@ def overlay_filter(duration, bug, snipe=None, glitch=None, promo=None, popups=No
         cur = f"v{n}"
 
     if bug and LOGO_BUG_FILE and os.path.exists(LOGO_BUG_FILE):
-        # Bottom right, inside the curved corner
+        # The G/TV badge top right, as the style guide puts it over a programme, inside the curved corner
         sources.append(f"movie={LOGO_BUG_FILE}[bug]")
-        stage("overlay=x=W-w-16:y=H-h-13", "[bug]")
+        stage(f"overlay=x=W-w-{round(12 * K)}:y={round(9 * K)}", "[bug]")
     if PROGRESS_BAR and duration > 0:
         # One scanline high, sliding in from the left. The frame timestamp is the position in the whole
-        # file, so the line carries on across act breaks instead of restarting each act
-        sources.append(f"color=c={PROGRESS_COLOR}:s=342x1:d=1,format=rgba[bar]")
-        stage(f"overlay=x='-w+w*min(1,t/{duration:.2f})':y=H-11:eval=frame", "[bar]")
+        # file, so the line carries on across act breaks instead of restarting each act. With the CRT shader it runs
+        # along the tube's curved bottom edge, five 200-line rows up (the shader fades the rows below that into the
+        # bezel); without, on the bottom edge
+        thick = max(1, round(K))
+        up = round(5 * K) if CRT or CRT_SHADER else thick
+        sources.append(f"color=c={PROGRESS_COLOR}:s={FRAME_W}x{thick}:d=1,format=rgba[bar]")
+        stage(f"overlay=x='-w+w*min(1,t/{duration:.2f})':y=H-{up}:eval=frame", "[bar]")
     for script in (popups, promo, snipe):
         if script:
             stage(f"ass=filename={script}:fontsdir={cards.FONTS_DIR}")
     for i, (path, start, end, slides) in enumerate(art or ()):
         # A clip is timed to start with its panel and stops being decoded when the panel ends
-        sources.append(f"movie={path}:loop=0,setpts=N/({posters.CLIP_FPS}*TB)+{start:.2f}/TB,trim=end={end:.2f}[art{i}]"
-                       if path.endswith(".mp4") else f"movie={path}[art{i}]")
+        bigger = "" if K == 1 else f",scale=iw*{K:.4f}:ih*{K:.4f}"   # posters and clips are cut for 342x200
+        sources.append(f"movie={path}:loop=0,setpts=N/({posters.CLIP_FPS}*TB)+{start:.2f}/TB,trim=end={end:.2f}{bigger}[art{i}]"
+                       if path.endswith(".mp4") else f"movie={path}{bigger}[art{i}]")
         x = str(ART_X)
         if slides:   # keeps pace with the bar's slide in (events: 450 ms from off the left edge)
             x = f"'{ART_X}-(1-min(1,(t-{start:.2f})/0.45))*{ART_SLIDE}'"

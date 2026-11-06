@@ -3,8 +3,10 @@ The playout loop: what airs next, the breaks, the special screens, emergency ale
 remote's commands. main() starts it all.
 """
 import datetime
+import faulthandler
 import os
 import random
+import signal
 import subprocess
 import threading
 import time
@@ -26,7 +28,7 @@ from retrotv import scores
 from retrotv.cache import CacheManager, MediaIndexer, ON_AIR, display_aspect, stretch_filter
 from retrotv.channels import Channels, NO_STATIC, QUIET_AFTER
 from retrotv.config import (
-    ALERTS, ALERT_CHECK_SECONDS, ALERT_CRAWL_MINUTES, ALERT_TEST_HOURS, ANNIVERSARY_HOUR, ANTHEM, ARCHIVE_SHARE,
+    ALERTS, ALERT_CHECK_SECONDS, ALERT_CRAWL_MINUTES, ALERT_TEST_HOURS, ANNIVERSARY_HOUR, ANTHEM, ARCHIVE_SHARE, BETWEEN_SHOWS_ONLY,
     ART_CHECK_MINUTES, BUMPER_FILE, CACHE_DIR, CLIP_GAP_SECONDS, CLIP_IDLE_SECONDS, CLIP_PRUNE_SECONDS,
     CLIP_RETRY_SECONDS, CRAWL_KINDS, ERA_WEIGHT, ERA_YEARS, FILLER_MAX_SECONDS, FRESH_SPECIALS, GLITCH_MINUTES,
     HOLIDAY_WEIGHT, INTRO_SECONDS, KIDS_END_HOUR, LATE_NIGHT_HOUR, LAUNCHES, LAUNCH_BEFORE_SECONDS,
@@ -39,7 +41,7 @@ from retrotv.config import (
     USB_SHOWS_DIR, WEATHER_LAT, WEATHER_LON, WEATHER_PLACE, WEATHER_TZ, logger, td)
 from retrotv.lineup import Lineup, MusicBlock, Show
 from retrotv.overlays import channel_osd, osd_msg, overlay_filter
-from retrotv.player import Item, Player
+from retrotv.player import STALL_CHECK_SECONDS, Item, Player
 from retrotv.rules import (
     allowed, blurb_level, broadcast_date, broadcast_hour, cache_path, commercial_year, heritage_month, holiday_look,
     holiday_season, holiday_tag, is_lottery, is_new_year, marathon_series, music_credit, near_sign_off,
@@ -69,6 +71,7 @@ class Station:
         self.epoch = 0              # the player's skip counter when this step began
         self.detour = None          # ((number, name), src): a fake channel's show asked for from the remote
         self.rejoining = False      # go back to the main channel once the detour is queued
+        self.rejoin_flash = True    # flash the channel number when it does (not after a restart: see resume)
         self.interrupted = None     # the main channel's show that was on when we changed channels
         self.pending_channel = None # (number, name) to flash on screen with the next item
         self.channels = Channels(self)
@@ -81,6 +84,7 @@ class Station:
                        if ALERTS and WEATHER_LAT is not None else None)
         self.eas_pending = None     # an alert card to cut in with, set by the alert thread
         self.eas_follow = None      # what airs after that card: a live launch
+        self.eas_follow_resumes = False   # after the follow-up, back to the show it cut (a test) rather than the schedule
         self.launches = launches.Launches()
         self.launch_live = None     # (launch, its Item, when it cut in)
         self.clips_tried = {}       # src -> when its clip was last tried, so a failure isn't retried at once
@@ -192,8 +196,8 @@ class Station:
             self.play_detour()
             return
         if self.rejoining:
-            self.rejoining = False
-            if self.rejoin():
+            self.rejoining, flash, self.rejoin_flash = False, self.rejoin_flash, True
+            if self.rejoin(flash):
                 return
         t = self.eta()
         start = t + td(seconds=INTRO_SECONDS)
@@ -215,6 +219,12 @@ class Station:
         self.on_air = True
         ON_AIR.set()
         self.air(show)
+
+    def resume(self, show):
+        """After a restart: today's plan was picked back up (Lineup.restore), so the station carries on with it, joining
+        whatever is on by now partway through (show: the one that was on, or None), the way switching a set back
+        on would, rather than choosing the day again."""
+        self.interrupted, self.rejoining, self.rejoin_flash = show, True, False
 
     def _queue_anniversary(self, start):
         """From ANNIVERSARY_HOUR, once a day, puts the day's anniversary episode next in line (copying it from
@@ -286,11 +296,13 @@ class Station:
 
     def fill(self, seconds, when, year=None, fine=True):
         """Commercials adding up to about `seconds` (statics included), era-matched to `year`. With
-        fine, the last stretch is topped up with bumps and short spots to land within a second or two."""
+        fine, the last stretch is topped up with bumps and short spots to land within a second or two. One that
+        has aired since today's sign-on goes again only when nothing else fits (or to land the top-up on time)."""
         hour = broadcast_hour(when)[1]
         season = holiday_season(when.date())
         pool = self.cache.commercial_pool(hour)
         random.shuffle(pool)
+        day_began = datetime.datetime.combine(broadcast_date(when), datetime.time(SIGN_ON_HOUR)).timestamp()
 
         pool = [(s, e) for s, e in pool if holiday_tag(s) in (None, season)]  # no Santa ads in July
         # archive.org's ads get about ARCHIVE_SHARE of the picks between them
@@ -314,6 +326,7 @@ class Station:
             cands = [(s, e) for s, e in pool if s not in used and e["duration"] + STATIC_SECONDS <= room]
             if not cands:
                 break
+            cands = [(s, e) for s, e in cands if e["last_played"] < day_began] or cands
             s, e = random.choices(cands, weights=[weight(s, e) for s, e in cands])[0]
             picked.append((s, e))
             used.add(s)
@@ -321,18 +334,22 @@ class Station:
         if fine and left > 1:
             fillers = [(s, e) for s, e in pool if s not in used and e["duration"] <= FILLER_MAX_SECONDS]
             best, best_left = [], left
-            for _ in range(60):
-                random.shuffle(fillers)
-                pick, rest = [], left
-                for s, e in fillers:
-                    d = e["duration"] + STATIC_SECONDS
-                    if d <= rest:
-                        pick.append((s, e))
-                        rest -= d
-                        if rest < 0.8:
-                            break
-                if rest < best_left:
-                    best, best_left = pick, rest
+            # Those that haven't aired today, and all of them only if that can't land the break on time
+            for group in ([x for x in fillers if x[1]["last_played"] < day_began], fillers):
+                for _ in range(60):
+                    random.shuffle(group)
+                    pick, rest = [], left
+                    for s, e in group:
+                        d = e["duration"] + STATIC_SECONDS
+                        if d <= rest:
+                            pick.append((s, e))
+                            rest -= d
+                            if rest < 0.8:
+                                break
+                    if rest < best_left:
+                        best, best_left = pick, rest
+                    if best_left < 0.8:
+                        break
                 if best_left < 0.8:
                     break
             picked += best
@@ -344,16 +361,14 @@ class Station:
     def mid_break(self, show):
         when = self.eta()
         season = holiday_look(when.date())
-        right_back = self.card(cards.right_back(season or heritage_month(when.date())))
-        back = self.card(cards.back_to(show.name, season))
+        right_back = self.card(cards.right_back(season or heritage_month(when.date()), show.name))
+        back = self.card(cards.back_to(show.name, season, show.episode, show.year))
         budget = show.mid_target - right_back.duration - back.duration - 2 * STATIC_SECONDS
         extra = []
         if self.remaining_lottery(when):
             extra.append(self.lottery_card(when))
         else:
-            special = self.special(when + td(seconds=budget / 2), between_shows=False)
-            if special:
-                extra.append(special)
+            extra += self.special(when + td(seconds=budget / 2), between_shows=False) or []
         budget -= sum(i.duration + STATIC_SECONDS for i in extra)
         items = self.fill(budget, when, show.year, fine=False)
         half = len(items) // 2
@@ -389,23 +404,27 @@ class Station:
         target = boundary - td(seconds=(events.NEW_YEAR_MIDNIGHT + STATIC_SECONDS) if new_year else intro)
         budget = (target - eta).total_seconds()
 
-        fixed = []
+        fixed = []   # groups of items that air together (a card and what follows it)
         if is_lottery(boundary) or self.remaining_lottery(eta):
-            fixed.append(self.lottery_card(boundary if is_lottery(boundary) else eta))
+            fixed.append([self.lottery_card(boundary if is_lottery(boundary) else eta)])
         special = self.special(eta, between_shows=True, first_start=next_start)
         if special:
             fixed.insert(0, special)
         if self.alerts and self.alerts.test_due(eta):
             test = self.alert_test_item()
             if test:
-                fixed.insert(0, test)  # first to go if the break is short; it tries again next break
+                fixed.insert(0, [test])  # first to go if the break is short; it tries again next break
         up_next = (7.0 + STATIC_SECONDS) if nxt else 0.0  # the card's music bed is 7 s
-        while fixed and budget - up_next - sum(i.duration + STATIC_SECONDS for i in fixed) < 20:
+        length = lambda: sum(i.duration + STATIC_SECONDS for group in fixed for i in group)
+        while fixed and budget - up_next - length() < 20:
             dropped = fixed.pop(0)  # no room: the special waits for the next break
-            if dropped.kind == "lottery":
-                self.lottery_day = None
-        items = self.fill(budget - up_next - sum(i.duration + STATIC_SECONDS for i in fixed), eta, show.year)
-        items += fixed
+            for item in dropped:
+                if item.kind == "lottery":
+                    self.lottery_day = None
+                if getattr(item, "src", None):   # a card's follow-up, reserved for it
+                    self.cache.release(item.src)
+        items = self.fill(budget - up_next - length(), eta, show.year)
+        items += [i for group in fixed for i in group]
         for item in items:
             if not self.emit(item):
                 return
@@ -416,7 +435,9 @@ class Station:
             d = min(UP_NEXT_SECONDS[1], max(UP_NEXT_SECONDS[0], d))
             card = cards.up_next((nxt.name, nxt.episode), (later.name, later.episode) if later else None,
                                  round_time(later.start) if later else None, duration=d,
-                                 season=holiday_look(target.date()))
+                                 season=holiday_look(target.date()), starts=round_time(nxt.start) if nxt.start else None,
+                                 year=nxt.year,
+                                 art=posters.wide(nxt.name) or posters.thumb(nxt.name))
             if not self.emit(self.card(card)):
                 return
         if new_year:
@@ -429,7 +450,7 @@ class Station:
         if now - self.last_special < SPECIAL_GAP_MINUTES * 60:
             return None
         due = [k for k, every in SPECIALS.items()
-               if every and now - self.special_last[k] >= every * 60 and (between_shows or k != "guide")]
+               if every and now - self.special_last[k] >= every * 60 and (between_shows or k not in BETWEEN_SHOWS_ONLY)]
         due.sort(key=lambda k: (now - self.special_last[k]) / SPECIALS[k], reverse=True)
         for kind in due:
             try:
@@ -442,9 +463,48 @@ class Station:
                 item = self.card(card)
                 if kind in FRESH_SPECIALS:
                     item.refresh = lambda kind=kind: self.build_special(kind, self.eta(), first_start)
-                return item
+                return [item] + self._follow(card)
             self.special_last[kind] = now - SPECIALS[kind] * 60 + 900  # no data right now, try again in 15 min
         return None
+
+    def _follow(self, card):
+        """[the item that airs right after a card]: its game's ad, its song's video; [] if it has none, or the file
+        has left the SD card since the card was made."""
+        e = self.cache.entry(card.follow) if card.follow else None
+        if not e:
+            return []
+        self.cache.reserve(card.follow)   # so the break's commercials can't pick it too
+        item = self._commercial_item(card.follow, e) if e["category"] == "commercials" else self._video_item(card.follow, e)
+        item.src = card.follow
+        return [item]
+
+    def _video_item(self, src, e, popups=None):
+        """A music video on its own (after #1 This Week, or a Pop-Up Video test), titled like the music blocks'
+        videos. popups: its bubbles' script (events.popups)."""
+        artist, song, year = meta.music_credit(src)
+        overlay: dict = dict(duration=e["duration"], bug=True)
+        if e["duration"] > MUSIC_TITLE_AT + 2 * MUSIC_TITLE_SECONDS + 5:
+            panels = ([("Now", artist)] if artist else []) + [(str(year) if year else "Video", song)]
+            overlay["promo"] = events.promo(panels, MUSIC_TITLE_AT, MUSIC_TITLE_SECONDS)
+        if popups:
+            overlay["popups"] = popups
+        vf, _ = overlay_filter(**overlay)
+        options = {"force-media-title": f"{artist} - {song}" if artist else song}
+        if vf:
+            options["vf-append"] = vf
+        item = Item(cache_path(e), e["duration"], "act", f"{artist} - {song}" if artist else song, options,
+                    on_end=lambda reason: self.cache.mark_played(src))
+        item.overlay = overlay
+        return item
+
+    def _cached(self, src):
+        return self.cache.entry(src) is not None
+
+    def _tonight(self):
+        """[(start, show name)] for the shows still to air this broadcast day, as planned."""
+        today = broadcast_date(datetime.datetime.now())
+        return [(round_time(s.start), s.name) for s in self.lineup.snapshot()
+                if s and s.start and broadcast_date(s.start) == today]
 
     def build_special(self, kind, airs_at, first_start):
         """A special screen for airs_at, or None without data."""
@@ -484,6 +544,14 @@ class Station:
         if kind == "blurb":
             show = self.current_show   # the show this break is in, which the bump may riff on
             return blurbs.blurb(blurb_level(airs_at), show.name if isinstance(show, Show) else None)
+        day = broadcast_date(airs_at)
+        if kind == "games":
+            return screens.games_today(airs_at, day, season, self._cached)
+        if kind == "born":
+            return screens.born_today(airs_at, day, season, self._tonight())
+        if kind == "number_one":
+            year = getattr(self.current_show, "year", None)   # the era of the show this break follows
+            return screens.number_one(airs_at, day, season, year, self._cached)
         return None
 
     def guide_rows(self, first_start):
@@ -510,7 +578,9 @@ class Station:
         if show.marathon_intro and not join:
             key = marathon_series(broadcast_date(t), self.cache.indexer)
             season = holiday_look(t.date())
-            self.emit(self.card(events.marathon(show.marathon, show.name, t, season)))
+            lineup = [(round_time(x.start), x.episode) for x in [show] + self.lineup.snapshot()
+                      if x.start and x.marathon == show.marathon and x.name == show.name]
+            self.emit(self.card(events.marathon(show.marathon, show.name, t, season, lineup)))
             logger.info(f"{show.marathon}: {show.name} ({key})")
         if self.anniversary and show.src == self.anniversary["src"] and not join:
             self.emit(self.card(screens.anniversary(self.anniversary, show.name, show.episode, t,
@@ -549,6 +619,8 @@ class Station:
             item.show, item.offset, item.overlay = show, begin, overlay
             if not self.emit(item):
                 break
+            if i == first:
+                self.cache.note_aired(show.src)   # it's on: a restart from here on doesn't put it back on (REPEAT_DAYS)
             if last:
                 self.end_break(show)
             else:
@@ -948,7 +1020,32 @@ class Station:
             except ValueError:
                 return "seconds= has to be a number."
             return self.remote_launch_test(ask.get("url", ""), seconds)
-        return "What to test? what=scores, promo, launch, alert or special."
+        if what == "popups":
+            return self.remote_popups_test()
+        return "What to test? what=scores, promo, launch, alert, special or popups."
+
+    def remote_popups_test(self):
+        """Cuts in with a cached music video that has Pop-Up Video facts, its bubbles every 9 s from 14 s in, once the
+        song's lower third has gone (on the air they're spread over the video from 20 s), then goes back to the show
+        where it was cut: to see how they look."""
+        if not self.on_air:
+            return "The station is off the air."
+        facts = popup_facts()
+        picks = []
+        for src, e in self.cache.music_pool(datetime.datetime.now()):
+            artist, song, _ = music_credit(src)
+            popped = facts.get(meta.popup_key(artist, song)) if artist else None
+            if popped:
+                picks.append((src, e, popped["facts"]))
+        if not picks:
+            return "No cached music video has Pop-Up Video facts."
+        src, e, found = random.choice(picks)
+        # popups() spreads the bubbles over the time it's given: give it just enough for them to come 9 s apart
+        quick = 14.0 + 9.0 * (len(found) - 1) + events.POPUP_SECONDS + events.POPUP_END_GAP + 0.1
+        item = self._video_item(src, e, popups=events.popups(found, min(e["duration"], quick), first=14.0, every=9.0))
+        show = self.current_show.name if self.current_show else None
+        self.cut_in(cards.right_back(holiday_look(datetime.date.today()), show), follow=item, resume_after=True)
+        return f"Pop-Up Video test: {item.label}."
 
     def remote_promo_test(self):
         """Puts the NEXT / LATER / TONIGHT lower third, pictures and all, over the show on now, to see how it looks."""
@@ -1046,8 +1143,9 @@ class Station:
         logger.info(f"Live launch cutting in: {launch.get('name')}, liftoff {launch.get('net')}")
         self.cut_in(events.launch_cut_in(rocket, mission, where, season), follow=item)
 
-    def cut_in(self, card, follow=None):
-        """Interrupts whatever is on with an alert card. A show picks up a few seconds before where it was cut."""
+    def cut_in(self, card, follow=None, resume_after=False):
+        """Interrupts whatever is on with an alert card. A show picks up a few seconds before where it was cut.
+        follow: an Item after the card; resume_after: back to the show after it too."""
         item = self.player.current()
         self.eas_resume = None
         self.eas_from_detour = bool(item and item.kind == "detour")
@@ -1059,6 +1157,7 @@ class Station:
         logger.info(f"Alert cutting in ({card.kind}, {card.duration:.0f}s)")
         self.eas_until = time.time() + card.duration + 10
         self.eas_follow = follow
+        self.eas_follow_resumes = resume_after
         self.eas_pending = card
         self.skipping = True
         self.player.flush()
@@ -1075,16 +1174,19 @@ class Station:
             return
         if follow:
             # A live launch eats the time of whatever it cut into: back to wherever the schedule has got to by then
+            # (a test's follow-up goes back to the show instead)
+            resumes, self.eas_follow_resumes = self.eas_follow_resumes, False
             if not self.emit(follow):
                 return
             self._wait_out(follow)
             if self.player.epoch != self.epoch:
                 return
-            resume = None
+            if not resumes:
+                resume = None
         if resume and resume[0] is self.interrupted:
             self.interrupted = None
             show, position = resume
-            self.emit(self.card(cards.back_to(show.name, holiday_look(datetime.date.today()))))
+            self.emit(self.card(cards.back_to(show.name, holiday_look(datetime.date.today()), show.episode, show.year)))
             point = self.act_at(show, position)
             if point:
                 self.air(show, join=point)
@@ -1414,6 +1516,9 @@ class Station:
 
 def main():
     logger.info("Retro TV Station Starting Up...")
+    # For a station that's stuck: kill -USR1 $(systemctl show -p MainPID --value retrotv) writes every thread's stack
+    # to the journal (journalctl -u retrotv), and the station carries on
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     health.install("station")
 
     # 1. Initialize Indexer (reads the SD card copy; only touches the NAS on a first run)
@@ -1427,8 +1532,12 @@ def main():
     lineup = Lineup(cache_manager)
     player = Player(cache_manager.set_aside)
     station = Station(cache_manager, lineup, player)
+    restored = lineup.restore(datetime.datetime.now())   # today's plan, if the station is coming back from a restart
+    if restored is not None or lineup.snapshot():
+        station.resume(restored)
     remote.start(station, REMOTE_PORT)
     # The background jobs, each a heartbeat on the health page
+    health.repeat("Player watchdog", player.check_stall, STALL_CHECK_SECONDS)
     if LAUNCHES:
         health.repeat("Live launches", station.check_launches, LAUNCH_CHECK_SECONDS)
     health.repeat("Show art", station.art_step, ART_CHECK_MINUTES * 60)

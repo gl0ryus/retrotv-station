@@ -165,13 +165,32 @@ def stand_in_refill(room_gb=105):
 
 
 print("first refill: added, wanted =", stand_in_refill())
+rs.LINEUP_FILE = SIM + "/lineup.json"
+if os.path.exists(rs.LINEUP_FILE):
+    os.remove(rs.LINEUP_FILE)
 lineup = rs.Lineup(cache)
 player = SimPlayer()
 st = rs.Station(cache, lineup, player)
 end = start.timestamp() + hours * 3600
 last_refill = clock.t
+# RESTART_AT=HH:MM (on the first day): the station restarts then, as after a crash or a deploy mid-show. The player
+# loses what it had queued; a new Lineup and Station come up and pick the saved plan back up (Lineup.restore)
+restart = os.environ.get("RESTART_AT")
+restart_t = _dt.datetime.combine(start.date(), _dt.time(*map(int, restart.split(":")))).timestamp() if restart else None
 while clock.t < end:
     st.step()
+    if restart_t and clock.t >= restart_t:
+        restart_t = None
+        was_on, planned = lineup.last, [s.src for s in lineup.snapshot()]
+        player.queue.clear()
+        player.t_end = clock.t
+        lineup = rs.Lineup(cache)
+        st = rs.Station(cache, lineup, player)
+        back = lineup.restore(_dt.datetime.fromtimestamp(clock.t))
+        st.resume(back)
+        kept = [s.src for s in lineup.snapshot()] == planned
+        print(f"RESTART at {_dt.datetime.fromtimestamp(clock.t):%a %H:%M:%S}: on was "
+              f"{was_on.title() if was_on else None}, brought back {back.title() if back else None}; plan kept: {kept}")
     if clock.t - last_refill > 86400:
         stand_in_refill()
         last_refill = clock.t

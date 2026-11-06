@@ -35,3 +35,13 @@ Raised 2026-10-29. All but the viewer poll were built that day; Dan scrapped the
 - **Your countdown.** Built: the Weekly Countdown from Last.fm opens the set-time music blocks, then the best placed artist's video. `screens.countdown`, `COUNTDOWN_BLOCKS`.
 - **Anniversary airing.** Built: From the Vault at 8 PM, an episode first aired on this date years ago, with a "That week" line. `news.pick_anniversaries`, `Station._queue_anniversary`.
 - **Tonight's sky.** Built: moon, planets and evening ISS passes, sunset to sign-off. `news.sky_tonight`, `screens.tonight_sky`.
+- **This Day in Gaming.** Built 2026-11-04: games out on this date that the commercials have an ad for, then one's ad. Release dates from Wikidata, a few games a run. `onthisday.gather_games`, `screens.games_today`.
+- **Born Today.** Built 2026-11-04: people from the library's shows born on this date, who they played and how old they turn, and when their show's on tonight. Casts from TVmaze. `onthisday.gather_cast`, `screens.born_today`.
+- **#1 This Week.** Built 2026-11-04: Billboard's number one this week in a past year (1977-2012), then its video when the library has it. Between shows only. `onthisday.gather_hot100`, `screens.number_one`.
+
+### The G|TV look
+Raised 2026-11-05, after every card was redrawn from the G|TV Network Graphics style guide (`retrotv/brand.py`).
+- **Break cards over the show.** The guide lays We'll Be Right Back and Now Back To over the programme itself. They're still cards of their own, over the guide's grey stand-in. Change: draw them as lower thirds (like the NEXT snipe) over the act's last seconds and the next act's first, and drop the two cards from the break.
+- **New network videos.** The sign-on, the sign-off CRT and the off-air loop are still the old network's. The ID card took over from the bumper's picture (its jingle stays).
+- **The heavier Archivo weights.** The cards use Archivo SemiBold (the variable font's default) and Archivo Black. True 800/900 weights need static instances cut from the variable font (fontTools, a new dependency).
+- **The web pages.** The remote, schedule, health, log and watch pages are still in the old browns, and could take the guide's palette and type.

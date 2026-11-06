@@ -6,6 +6,6 @@ After=network-online.target mnt-tower.mount
 [Service]
 Type=oneshot
 User=gl0ryus
-ExecStart=/home/gl0ryus/retrotv_venv/bin/python /mnt/tower/.retrotv/station/retrotv_news.py
+ExecStart=/home/gl0ryus/retrotv_venv/bin/python /home/gl0ryus/retrotv_station/current/retrotv_news.py
 Nice=10
 TimeoutStartSec=300

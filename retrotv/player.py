@@ -4,18 +4,33 @@ The long-running mpv that plays everything, fed over its JSON IPC socket (Player
 import datetime
 import json
 import os
+import re
 import socket
 import subprocess
 import threading
 import time
 
+from retrotv import playlog
 from retrotv.jsonio import write_json
 from retrotv.config import (
-    AUDIO_TAP_FILE, LIVE_AUDIO_DEVICE, LIVE_AUDIO_PORT, LIVE_AUDIO_RATE, LIVE_STREAM, MPV_SOCKET, PLAYER_CMD, PLAYER_ENV,
-    PLAYER_MEMORY_CHECK_SECONDS, PLAYER_MEMORY_MB, REMOTE_STATE_FILE, logger)
+    AUDIO_TAP_FILE, LIVE_ALSA_STATUS, LIVE_AUDIO_DEVICE, LIVE_AUDIO_PORT, LIVE_AUDIO_RATE, LIVE_STREAM, MPV_SOCKET,
+    PLAYER_CMD, PLAYER_ENV, PLAYER_MEMORY_CHECK_SECONDS, PLAYER_MEMORY_MB, REMOTE_STATE_FILE, logger)
 
 TAP_CHECK_SECONDS = 60
 DISPLAY_CHECK_SECONDS = 30
+STALL_SECONDS = 15   # playback stuck this long: mpv reopens its sound; still stuck as long again: a new mpv
+STALL_CHECK_SECONDS = 5
+
+
+def alsa_state(status=LIVE_ALSA_STATUS):
+    """The panel's sound device as ALSA reports it, for the log: "RUNNING, 4200 frames queued"."""
+    try:
+        with open(status) as f:
+            text = f.read()
+    except OSError as e:
+        return f"unreadable ({e})"
+    state, delay = re.search(r"state:\s*(\S+)", text), re.search(r"delay\s*:\s*(-?\d+)", text)
+    return (state.group(1) if state else text.strip()[:40]) + (f", {delay.group(1)} frames queued" if delay else "")
 
 try:   # read once, at startup, so restarting mpv never waits for the NAS to wake
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "audio_tap.py"), "rb") as _f:
@@ -60,10 +75,11 @@ class Item:
         self.started = None
         self.show = None        # the Show an act belongs to
         self.offset = 0.0       # where in the file the act starts
-        self.overlay = None     # overlay_filter() arguments, so a glitch can be added at the last moment
+        self.overlay: dict | None = None   # overlay_filter() arguments, so a glitch can be added at the last moment
         self.channel = None     # (number, name) for a make-believe channel's show
         self.ended = threading.Event()   # set for a live launch when it's over (Station._wait_out)
         self.refresh = None     # remakes a card with the latest data just before it's queued (Station._refresh)
+        self.src: str | None = None   # the cached file a card reserved to follow it (Station._follow)
 
 
 class Player:
@@ -92,6 +108,7 @@ class Player:
         # Called before each mpv start: the watch page's capture must let go of the screen first. Whoever opens the
         # display while nobody holds it becomes its owner, and mpv can't draw without being the owner
         self.before_start = None
+        self.stall = None          # (playback time, since when it hasn't moved, sound reopened yet): see check_stall
         self.volume, self.muted = 100, False
         try:
             with open(REMOTE_STATE_FILE) as f:
@@ -146,8 +163,7 @@ class Player:
                     item = self.pending.get(msg.get("playlist_entry_id"))
                     if item:
                         item.started = time.time()
-                        if item.kind != "static":
-                            logger.info(f"Playing: {item.label}")
+                        self._announce(item)
                     else:
                         self.started[msg.get("playlist_entry_id")] = time.time()  # beat its loadfile reply
                 elif event == "end-file":
@@ -163,6 +179,13 @@ class Player:
             if sock is self.sock:
                 self.alive = False
             self.cv.notify_all()
+
+    @staticmethod
+    def _announce(item):
+        """An item has started: the log line, and the play log page's record (the static between items is neither)."""
+        if item.kind != "static":
+            logger.info(f"Playing: {item.label}")
+            playlog.record(item.kind, item.label, item.started)
 
     def _finish(self, finished):
         while finished:
@@ -247,6 +270,40 @@ class Player:
             logger.error("The watch page's audio tap stopped, reopening the player's sound.")
             self._command(["ao-reload"])
 
+    def check_stall(self, now=None):
+        """A frozen picture: mpv playing (not idle, paused or waiting on the network) but its playback time stuck for
+        STALL_SECONDS. Seen 2026-11-05: the sound device stopped 36 s into the weather card and nothing moved until a
+        restart. First mpv reopens its sound; if that doesn't free it, mpv is stopped, and play() (waiting on it) starts
+        a new one, as for any player that dies. Run every STALL_CHECK_SECONDS (main: a background job)."""
+        now = time.time() if now is None else now
+        proc = self.proc
+        if not self.alive or proc is None or now - self.started_at < STALL_SECONDS:
+            self.stall = None
+            return
+        try:
+            if any(self._command(["get_property", p]).get("data") for p in ("idle-active", "pause", "paused-for-cache")):
+                self.stall = None
+                return
+            position = self._command(["get_property", "playback-time"]).get("data")
+        except (OSError, RuntimeError):
+            return   # mpv went away meanwhile: play() sees to that
+        if position is None or self.stall is None or self.stall[0] != position:
+            self.stall = (position, now, False)
+            return
+        _, since, reopened = self.stall
+        if now - since < STALL_SECONDS:
+            return
+        item = self.current()
+        where = f"{position:.1f} s into {item.label if item else 'what was playing'}"
+        if not reopened:
+            logger.error(f"Player stuck {now - since:.0f} s at {where} (sound device: {alsa_state()}), reopening its sound.")
+            self._command(["ao-reload"])
+            self.stall = (position, now, True)
+        else:
+            logger.error(f"Player still stuck at {where} (sound device: {alsa_state()}), starting it afresh.")
+            self.stall = None
+            proc.kill()
+
     def showing(self):
         """True when mpv is up and drawing on the panel (it holds the display and its video output is set up)."""
         if not self.alive:
@@ -313,8 +370,7 @@ class Player:
             started = self.started.pop(eid, None)
             if started and not early:
                 item.started = started
-                if item.kind != "static":
-                    logger.info(f"Playing: {item.label}")
+                self._announce(item)
             if not early:
                 self.pending[eid] = item
         if early:

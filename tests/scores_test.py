@@ -1,5 +1,5 @@
 # The score card, off the air. Runs on the Pi: python3 -I scores_test.py [video file to render previews over]
-import io, json, os, shutil, subprocess, sys, tempfile, time, urllib.request
+import io, json, os, re, shutil, subprocess, sys, tempfile, time, urllib.request
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))   # the station: this is its tests/ folder
 from retrotv import cards
 from retrotv import scores
@@ -91,12 +91,12 @@ start = 100.0
 two = [dict(g), {**g, "league": "nba", "ours": False, "away": ("MIA", "101", None), "home": ("ORL", "99", None), "detail": "End of the 3rd Quarter"}]
 logos = {("nhl", "TB"): "/x/nhl-tb.png", ("nhl", "BOS"): "/x/nhl-bos.png"}
 spec = scores.board_filter(two, start, logos)
-check(spec.startswith("lavfi=[movie=/x/nhl-tb.png[logo0]") or spec.startswith("lavfi=[movie=/x/nhl-bos.png[logo0]"), spec[:60])
+check(re.match(r"lavfi=\[movie=/x/nhl-(tb|bos)\.png(,scale=[^\[]*)?\[logo0\]", spec), spec[:60])   # scaled up without the CRT
 check(spec.count("movie=") == 2 and spec.count("overlay=") == 2, "one overlay per logo")
 check("[in]ass=filename=" in spec and spec.endswith("]") and "[v2]" not in spec, "ends feeding mpv")
 check("between(t,100.66,106.54)" in spec, "only during its game")
 script = open(os.path.join(cards.CARDS_DIR, sorted(os.listdir(cards.CARDS_DIR))[-1]), encoding="utf-8").read()
-check("NHL SCORES" in script and "NBA SCORES" in script and "3RD 12:04" in script and "MIA" in script and "101" in script, "the text")
+check("}NHL" in script and "}NBA" in script and "3RD 12:04" in script and "MIA" in script and "101" in script, "the text")
 plain = scores.board_filter(two[1:], start, {})
 check(plain.startswith("lavfi=[ass=filename=") and "movie" not in plain, "no logos, no overlays")
 

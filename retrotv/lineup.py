@@ -2,6 +2,7 @@
 What airs when: Show and MusicBlock, and the Lineup that plans them from the weekly schedule.
 """
 import datetime
+import json
 import random
 import threading
 import time
@@ -11,12 +12,17 @@ from retrotv import screens
 from retrotv import events
 from retrotv import meta
 from retrotv.config import (
-    COUNTDOWN_BLOCKS, INTRO_SECONDS, LINEUP_HOURS, MAIN_CATEGORIES, MEDIA_ROOT, MID_BREAK_SECONDS, MIN_CUT_MINUTES,
-    MIN_END_BREAK_SECONDS, MUSIC_MIN_FILL, NEW_YEAR_COUNTDOWN, SHORT_SHOW_MINUTES, SLOT_MINUTES, STATIC_SECONDS,
-    TIGHT_END_SECONDS, logger, td)
+    COUNTDOWN_BLOCKS, INTRO_SECONDS, LINEUP_FILE, LINEUP_HOURS, MAIN_CATEGORIES, MEDIA_ROOT, MID_BREAK_SECONDS,
+    MIN_CUT_MINUTES, MIN_END_BREAK_SECONDS, MUSIC_MIN_FILL, NEW_YEAR_COUNTDOWN, SHORT_SHOW_MINUTES, SIGN_OFF_HOUR,
+    SLOT_MINUTES, STATIC_SECONDS, TIGHT_END_SECONDS, logger, td)
+from retrotv.jsonio import write_json
 from retrotv.rules import (
-    act_targets, artist_key, base_category, broadcast_hour, cache_path, is_lottery, mix_at, music_credit,
-    near_sign_off, next_boundary, off_air, on_grid, plan_breaks, sign_on_after, slot_end, tight_plan)
+    act_targets, artist_key, base_category, broadcast_date, broadcast_hour, cache_path, is_lottery, mix_at,
+    music_credit, near_sign_off, next_boundary, off_air, on_grid, plan_breaks, sign_on_after, slot_end, tight_plan)
+
+STRETCHED = object()   # what _pick returns when it filled the time left by stretching the show before
+UNFILLED = object()    # ... and when the slot's block has nothing on the Pi for it yet, far enough ahead to wait
+STRETCH_MAX = td(minutes=SLOT_MINUTES)   # the most time a show's breaks take on (Lineup._stretch)
 
 
 class Show:
@@ -41,6 +47,7 @@ class Show:
         self.overrun = False               # it may run past the slot's close
         self.keep_breaks = None            # how many mid-show breaks a tight slot leaves it, None for all
         self.cut = False                   # stops at self.duration, before the file ends (see cut_to)
+        self.stretch = False               # its breaks fill its slot to the close: nothing else from it fits after
 
     def title(self):
         return f"{self.name} · {self.episode}" if self.episode else self.name
@@ -83,8 +90,12 @@ class Show:
         if self.window and self.end > self.window[1] and not off_air(self.window[1]):   # sign-off can wait for it
             mids, self.end = tight_plan(self.duration, mids, start, self.window[1])
             self.keep_breaks = mids
+        if self.stretch and self.window and self.window[1] > self.end:
+            self.end = self.window[1]   # to its slot's close (Lineup._stretch)
         fill = (self.end - start).total_seconds() - self.duration - INTRO_SECONDS
-        if mids:
+        if mids and self.stretch:
+            self.mid_target = max(MID_BREAK_SECONDS[0], fill / (mids + 1))   # the extra time shared evenly by its breaks
+        elif mids:
             self.mid_target = min(MID_BREAK_SECONDS[1], max(MID_BREAK_SECONDS[0], fill / (mids + 1.5)))
         self.end_target = fill - mids * self.mid_target + INTRO_SECONDS
 
@@ -133,8 +144,22 @@ class MusicBlock:
         self.end_target = fill - mids * self.mid_target + INTRO_SECONDS
 
 
+def _record(show):
+    """What Lineup.restore needs to bring a planned show back (see Lineup.save)."""
+    def when(t):
+        return t.isoformat() if t else None
+    base = {"start": when(show.start), "window": [when(t) for t in show.window] if show.window else None,
+            "overrun": bool(show.overrun)}
+    if isinstance(show, MusicBlock):
+        return {**base, "music": show.name, "minutes": show.minutes, "srcs": show.srcs,
+                "break_after": sorted(show.break_after), "countdown": show.countdown, "lead": show.lead}
+    return {**base, "src": show.src, "in_order": show.in_order, "stretch": show.stretch, "requested": show.requested,
+            "marathon": show.marathon, "cut": show.duration if show.cut else None}
+
+
 class Lineup:
-    """The next few hours of shows, chosen ahead of time so cards and the guide can say what's coming."""
+    """The broadcast day's shows, chosen ahead of time (to sign-off) so cards and the guide can say what's coming, and
+    kept on disk so a restart carries on with them."""
     def __init__(self, cache):
         self.cache = cache
         self.shows = []
@@ -161,23 +186,29 @@ class Lineup:
         return t
 
     def plan(self, first_start, until=None):
-        """Schedules shows until the lineup covers LINEUP_HOURS from first_start (or up to `until`)."""
+        """Schedules shows to the end of the broadcast day (sign-off), and at least LINEUP_HOURS (or to `until`) from
+        first_start, so the whole day is decided once and a restart can pick it back up (save, restore)."""
         end = self.retime(first_start)
         if self._prune():
             end = self.retime(first_start)
-        horizon = first_start + td(hours=LINEUP_HOURS)
-        if until and until > horizon:
-            horizon = until
+        sign_off = first_start.replace(hour=SIGN_OFF_HOUR, minute=0, second=0, microsecond=0)
+        if sign_off <= first_start:
+            sign_off += td(days=1)
+        horizon = max(first_start + td(hours=LINEUP_HOURS), sign_off, until or sign_off)
         while end < horizon or not self.shows:
             start = sign_on_after(end) if near_sign_off(end) else end
             with self.lock:
-                prev = self.shows[-1] if self.shows else None
-            show = self._pick(start, prev)
-            if not show:
-                break
+                prev = self.shows[-1] if self.shows else self.last
+            show = self._pick(start, prev, first_start + td(hours=LINEUP_HOURS))
+            if show is STRETCHED:   # the show before now runs to its slot's close: on to the next slot
+                end = self.retime(first_start)
+                continue
+            if show is UNFILLED or not show:
+                break   # the rest waits: a later plan() goes on from here, once the refill has caught up
             with self.lock:
                 self.shows.append(show)
             end = self.retime(first_start)
+        self.save()
         self.wake.set()
 
     @staticmethod
@@ -199,18 +230,25 @@ class Lineup:
         return bool(gone)
 
     def replan(self):
-        """The schedule changed: everything not yet on the air gets picked again."""
+        """The schedule changed: everything not yet on the air gets picked again (and saved: see plan)."""
         for show in self.snapshot():
             if not getattr(show, "requested", False):
                 self.drop(show)
 
-    def _pick(self, start, prev=None):
+    def _pick(self, start, prev=None, near=None):
+        """The next show at `start`: the schedule's, or the old odds outside it. Within a slot, when nothing from its
+        block fits, the show before is stretched (STRETCHED); failing that, past `near` the time is left for a later
+        plan (UNFILLED), since what the block needs may not be on the Pi yet; before it, a show from outside fills in."""
         with self.lock:
             planned = {s.src for s in self.shows}
         on_air = self.cache.schedule_slot(start)
         if on_air:
             group, opens, closes = on_air
             show = self._from_slot(group, opens, closes, start, planned)
+            if not show and self._stretch(prev, opens, closes, start):
+                return STRETCHED
+            if not show and near is not None and start > near:
+                return UNFILLED
             if not show:
                 show = self._filler(start, prev, planned)
                 if show:
@@ -226,7 +264,8 @@ class Lineup:
         """The group's next show that ends by the time its slot closes, giving up commercials if it has to. A group
         that gets cut off (see _cut_to_slot) airs its next show however long it is. Otherwise, at the top of the slot
         a show whose turn it is airs anyway and runs over, and so does whatever runs over least if nothing else can
-        air: it's what's scheduled, and whatever follows joins late."""
+        air: it's what's scheduled, and whatever follows joins late. Later in the slot, nothing that fits: None (see
+        _pick, which stretches the show before)."""
         points = self._fixed_points(start)
         at_top = start - opens < td(minutes=1)
         left = ((min(points) if points else closes) - start).total_seconds()
@@ -245,6 +284,21 @@ class Lineup:
         if show and getattr(show, "duration", 0) + INTRO_SECONDS + TIGHT_END_SECONDS > left:
             show.overrun = True
         return show
+
+    def _stretch(self, prev, opens, closes, start):
+        """Nothing from the slot's group fits the time left: the show before it, if it's from the same slot and not on
+        the air yet, takes the time instead, its commercial breaks stretched to the slot's close, as a real station
+        pads a program to its slot (Dan, 2026-11-06). Only for up to STRETCH_MAX: a longer gap isn't a program's
+        padding. True if it did."""
+        with self.lock:
+            planned = prev is not None and any(s is prev for s in self.shows)
+        if (not planned or not isinstance(prev, Show) or prev.cut or prev.window != (opens, closes)
+                or start <= opens or start >= closes or closes - start > STRETCH_MAX):
+            return False
+        prev.stretch = True
+        logger.info(f"Schedule: nothing from the slot fits at {cards.clock(start)}, "
+                    f"{prev.title()} runs to {cards.clock(closes)} with longer breaks")
+        return True
 
     def _cut_to_slot(self, show, start):
         """A show from a group that can't run over stops where the slot ends."""
@@ -303,14 +357,21 @@ class Lineup:
 
     def _filler(self, start, prev, planned):
         """When the schedule has nothing that fits (a few minutes left in a slot, or nothing cached yet): the old
-        odds, leaving out G4, which keeps to its nights."""
+        odds, leaving out G4, which keeps to its nights. Nothing that aired within REPEAT_DAYS (see show_candidates)
+        while anything else can go: when nothing fresh fits, a short rerun (a cartoon or short film, under
+        SHORT_SHOW_MINUTES) fills the gap rather than a fresh show running past the slot, and a longer rerun airs only
+        when nothing fresh is cached at all."""
         mix = mix_at(*broadcast_hour(start))
         points = self._fixed_points(start)
-        cands, fitting = {}, {}
-        for c in set(mix) | set(MAIN_CATEGORIES):
-            options = [x for x in self.cache.show_candidates(c, start, planned) if x[1]["category"] != "g4"]
-            cands[c] = [x for x in options if x[0] not in self.cache.aired] or options
-            fitting[c] = [x for x in cands[c] if not self._crosses(x, start, points)]
+        cands, fitting = self._filler_options(mix, start, planned, points)
+        if not any(fitting.values()):
+            again, again_fitting = self._filler_options(mix, start, planned, points, rerun=True)
+            shorts = {c: [x for x in xs if (x[1]["duration"] or 1800.0) < SHORT_SHOW_MINUTES * 60]
+                      for c, xs in again_fitting.items()}
+            if not any(cands.values()):
+                cands, fitting = again, again_fitting
+            elif any(shorts.values()):
+                fitting = shorts
         # The mix is airtime: each category's odds are divided by how long its pick would run
         weights = [w / self._mean_slot(fitting[c] or cands[c], start, prev) for c, w in mix.items()]
         category = random.choices(list(mix), weights=weights)[0]
@@ -327,6 +388,17 @@ class Lineup:
         show = self._choose(fallback, start, prev)
         show.overrun = True
         return show
+
+    def _filler_options(self, mix, start, planned, points, rerun=False):
+        """{category: what the filler could air} and {category: those of them that end before the slot does}, what
+        has never aired first in each. rerun: see show_candidates."""
+        cands, fitting = {}, {}
+        for c in set(mix) | set(MAIN_CATEGORIES):
+            options = [x for x in self.cache.show_candidates(c, start, planned, rerun=rerun) if x[1]["category"] != "g4"]
+            fit = [x for x in options if not self._crosses(x, start, points)]
+            cands[c] = [x for x in options if x[0] not in self.cache.aired] or options
+            fitting[c] = [x for x in fit if x[0] not in self.cache.aired] or fit
+        return cands, fitting
 
     def _fixed_points(self, start):
         """Times a show starting at `start` shouldn't run across: midnight on New Year's Eve (for the
@@ -466,6 +538,7 @@ class Lineup:
             if first_start:
                 self.retime(first_start)
         logger.info(f"Requested from the remote: {show.title()}")
+        self.save()
         self.wake.set()
         return show
 
@@ -475,7 +548,82 @@ class Lineup:
             if not self.shows:
                 return None
             self.last = self.shows.pop(0)
-            return self.last
+        self.save()
+        return self.last
+
+    # --- The day's plan on disk (LINEUP_FILE), so a restart picks it back up instead of choosing again ---
+
+    def save(self):
+        """Writes the show on now (lineup.last, with its start) and those planned after it. Never raises."""
+        with self.lock:
+            last, shows = self.last, list(self.shows)
+        first = next((s.start for s in [last] + shows if s is not None and s.start), None)
+        if first is None:
+            return
+        try:
+            write_json(LINEUP_FILE, {"day": broadcast_date(first).isoformat(), "saved": time.time(),
+                                     "last": _record(last) if last is not None else None,
+                                     "shows": [_record(s) for s in shows]})
+        except (OSError, TypeError, ValueError) as e:
+            logger.error(f"Could not save the day's plan: {e}")
+
+    def restore(self, now):
+        """Brings back today's saved plan: the shows to come, and the one that was on, returned (with its start) for
+        the station to rejoin by the clock (Station.resume). None when there's no plan for today's broadcast day.
+        A show whose file has left the Pi is left out; the rest keep their places on the clock."""
+        try:
+            with open(LINEUP_FILE) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(saved, dict) or saved.get("day") != broadcast_date(now).isoformat():
+            return None
+        last = self._revive(saved["last"]) if saved.get("last") else None
+        shows = [s for s in (self._revive(r) for r in saved.get("shows") or []) if s is not None]
+        if last is not None and last.start:
+            last.plan_slot(last.start)
+            first = last.end
+        else:
+            first = next((s.start for s in shows if s.start), now)
+        with self.lock:
+            self.shows, self.last = shows, last
+        self.retime(first)
+        logger.info(f"Picked the day's plan back up: {len(shows)} shows to come"
+                    + (f", {last.title()} on since {cards.clock(last.start)}" if last is not None and last.start else ""))
+        self.wake.set()
+        return last
+
+    def _revive(self, r):
+        """A Show or MusicBlock from a saved record, reserved again in the cache, or None if its files are gone."""
+        def when(t):
+            return datetime.datetime.fromisoformat(t) if t else None
+        try:
+            show: Show | MusicBlock
+            if "music" in r:
+                videos = [(s, self.cache.entry(s)) for s in r["srcs"]]
+                if not videos or any(e is None for _, e in videos):
+                    return None
+                show = MusicBlock(r["music"], r["minutes"], videos, r["break_after"],
+                                  [tuple(c) for c in r.get("countdown") or []], tuple(r["lead"]) if r.get("lead") else None)
+                for s, _ in videos:
+                    self.cache.reserve(s)
+            else:
+                e = self.cache.entry(r["src"])
+                if e is None:
+                    return None
+                show = Show(r["src"], cache_path(e), e, r.get("in_order", False))
+                show.stretch, show.requested, show.marathon = bool(r.get("stretch")), r.get("requested", False), r.get("marathon")
+                if r.get("cut"):
+                    show.cut_to(r["cut"])
+                self.cache.reserve(r["src"])
+            window = r.get("window")
+            show.window = (when(window[0]), when(window[1])) if window else None
+            show.overrun = bool(r.get("overrun"))
+            show.start = when(r.get("start"))
+            return show
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            logger.error(f"Could not bring back a planned show ({e}): {r}")
+            return None
 
     def upcoming(self, first_start):
         self.retime(first_start)
@@ -492,6 +640,7 @@ class Lineup:
             if show in self.shows:
                 self.shows.remove(show)
             self.last = show
+        self.save()
 
     def drop(self, show):
         """Forgets a planned show whose slot went by while the set was on another channel."""
@@ -500,6 +649,7 @@ class Lineup:
                 self.shows.remove(show)
         for src in getattr(show, "srcs", [show.src]):
             self.cache.release(src)
+        self.save()
 
     def drop_before(self, t):
         for show in self.snapshot():

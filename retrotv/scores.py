@@ -11,9 +11,10 @@ import subprocess
 import time
 
 from retrotv.art import download_image
-from retrotv.cards import LABEL_INK, ARCHIVO, BARLOW_X, CREAM, FONTS_DIR, H, MUSTARD, Script, W, rounded
-from retrotv.cards import fit as cards_fit
-from retrotv.events import BAR_RIGHT, BAR_SLANT, lower_third
+from retrotv import brand
+from retrotv.brand import Part
+from retrotv.cards import FONTS_DIR, H, Script, W
+from retrotv.config import FRAME_H, FRAME_W   # the picture where the filter joins it
 from retrotv.jsonio import get_json
 from retrotv.paths import DATA_DIR
 
@@ -22,12 +23,10 @@ logger = logging.getLogger("RetroTV")
 SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
 SPORTS = {"nfl": "football", "nba": "basketball", "nhl": "hockey", "mlb": "baseball"}
 FRESH_SECONDS = 120         # scores older than this are fetched again before a card
-TOP, HEIGHT = 414, 110      # the same bottom edge as those lower thirds, about twice as tall
-TAG_WIDTH = 176             # the mustard box with the league and the game's clock
-FIRST_TEAM_X, TEAM_WIDTH = 214, 256
-CHIP = 86                   # the cream plate behind a logo: ESPN's are drawn for a light background
-SCORE_SIZE, NAME_SIZE = 56, 38
-FRAME_W, FRAME_H = 342, 200 # the picture at the point in the chain the filter joins it, after the CRT crunch
+LEFT, TOP = 44, 350          # the score bug: its bottom edge on the NEXT lower third's (events.BAR_TOP + BAR_HEIGHT)
+TAG_H, ROW_H = 40, 61        # the league and clock strip, and a team's row
+PLATE, NAME_W, SCORE_W = 90, 290, 112   # a row's parts: the white plate behind a logo (ESPN's are drawn for a light
+                                        # background), the team, the score
 PAGE_SECONDS = 6.0          # each game this long
 LEAD = 0.6                  # the bar slides in before the first game shows
 LOGO_DIR = os.path.join(DATA_DIR, "team_logos")
@@ -151,43 +150,49 @@ def _frame_y(y):
 
 
 def board_filter(games, start, logos):
-    """The score card for the vf chain, from file time `start`: a large lower third (the same bottom edge as the NEXT
-    one, reaching higher), showing the games one at a time, each team as its logo, score and name:
+    """The score card for the vf chain, from file time `start`: the guide's score bug, standing on the NEXT lower
+    third's bottom edge and showing the games one at a time:
 
-        [ NHL SCORES ]  (logo)  3        (logo)  1
-        [ 3RD 12:04  ]  (logo)  TB       (logo)  BOS
+        [ NHL | 3RD 12:04 ]
+        [ (logo) | BOS       | 1 ]
+        [ (logo) | TB        | 3 ]
 
     Pictures can't go in an ASS script, so the logos are laid over it, each only during its game."""
-    bar_end = start + LEAD + len(games) * PAGE_SECONDS + 0.3
     s = Script()
-    lower_third(s, start, bar_end, TAG_WIDTH, BAR_RIGHT - 40 - TAG_WIDTH, top=TOP, height=HEIGHT, bar_alpha="&H20&")
     sources, stages, label = [], [], "base"
-    room = (TAG_WIDTH - BAR_SLANT - 22) * 1.45    # fit's estimates run wide
     for i, g in enumerate(games):
-        a = start + LEAD + i * PAGE_SECONDS
-        b = a + PAGE_SECONDS
-        fade = (120, 120)
-        title = f"{g['league'].upper()} SCORES"
-        detail = g["detail"].upper()
-        s.text(a, b, 54, TOP + 36, title, BARLOW_X, cards_fit(title, BARLOW_X, 40, room), LABEL_INK, align=4, fade=fade, layer=3)
-        s.text(a, b, 54, TOP + 78, detail, BARLOW_X, cards_fit(detail, BARLOW_X, 40, room), LABEL_INK, align=4, fade=fade, layer=3)
-        color = MUSTARD if g["ours"] else CREAM
-        for j, side in enumerate((g["away"], g["home"])):
-            x = FIRST_TEAM_X + j * TEAM_WIDTH
-            has_logo = (g["league"], side[0]) in logos
-            s.shape(a, b, x, TOP + (HEIGHT - CHIP) / 2, rounded(CHIP, CHIP, 10), CREAM, fade=fade, layer=3)
-            if not has_logo:   # no logo to hand: the team's letters on the same plate
-                s.text(a, b, x + CHIP / 2, TOP + HEIGHT / 2, side[0], BARLOW_X, cards_fit(side[0], BARLOW_X, 44, CHIP - 8), LABEL_INK, fade=fade, layer=4)
-            middle = x + CHIP + (TEAM_WIDTH - CHIP - 8) / 2
-            s.text(a, b, middle, TOP + 40, str(side[1]), ARCHIVO, SCORE_SIZE, color, fade=fade, layer=3)
-            s.text(a, b, middle, TOP + 88, side[0], BARLOW_X, NAME_SIZE, color, fade=fade, layer=3)
-            if has_logo:
+        a = start + LEAD + i * PAGE_SECONDS if i else start
+        b = start + LEAD + (i + 1) * PAGE_SECONDS
+        first = i == 0
+        fade = (0 if first else 120, 300 if i == len(games) - 1 else 120)
+        slide = (0, 450, 780) if first else None
+        brand.strip(s, a, b, LEFT, TOP, TAG_H, [Part(g["league"].upper(), brand.ANTON, 30, brand.INK, brand.YELLOW,
+                                                     pad=16),
+                                                Part(g["detail"].upper(), brand.ANTON, 28, brand.WHITE, brand.INK,
+                                                     pad=16)],
+                    shadow=(6, 6, brand.INK), fade=fade, slide=slide, layer=3)
+        for j, (side, fill, score_fill) in enumerate(((g["away"], brand.PURPLE, brand.YELLOW),
+                                                      (g["home"], brand.INK, brand.WHITE))):
+            top = TOP + TAG_H + 8 + j * (ROW_H + 8)
+            brand.strip(s, a, b, LEFT, top, ROW_H,
+                        [Part("", brand.ANTON, 30, brand.INK, brand.WHITE, pad=0, width=PLATE),
+                         Part(side[0], brand.ANTON, 40, brand.WHITE, fill, pad=22, width=NAME_W),
+                         Part(str(side[1]), brand.ANTON, 48, brand.INK, score_fill, pad=0, width=SCORE_W,
+                              align="center")],
+                        shadow=(7, 7, brand.INK), fade=fade, slide=slide, layer=3)
+            if (g["league"], side[0]) in logos:
                 source = f"logo{len(sources)}"
-                sources.append(f"movie={logos[g['league'], side[0]]}[{source}]")
+                bigger = "" if FRAME_W == 342 else f",scale=iw*{FRAME_W / 342:.4f}:ih*{FRAME_W / 342:.4f}"
+                sources.append(f"movie={logos[g['league'], side[0]]}{bigger}[{source}]")
                 following = f"v{len(sources)}"
-                stages.append(f"[{label}][{source}]overlay=x={_frame_x(x + CHIP / 2)}-w/2:y={_frame_y(TOP + HEIGHT / 2)}-h/2:"
-                              f"enable='between(t,{a + 0.06:.2f},{b - 0.06:.2f})'[{following}]")
+                show_from = start + LEAD + i * PAGE_SECONDS + 0.06   # once the bar has slid in
+                stages.append(f"[{label}][{source}]overlay=x={_frame_x(LEFT + PLATE / 2)}-w/2:"
+                              f"y={_frame_y(top + ROW_H / 2)}-h/2:enable='between(t,{show_from:.2f},{b - 0.06:.2f})'"
+                              f"[{following}]")
                 label = following
+            else:   # no logo to hand: the team's letters on the plate
+                brand.words(s, a, b, LEFT + PLATE / 2, top + ROW_H / 2, side[0], brand.ANTON, 26, brand.INK,
+                            align="center", fade=fade, slide=slide, layer=6)
     text = f"ass=filename={s.write('scores')}:fontsdir={FONTS_DIR}"
     if not stages:
         return f"lavfi=[{text}]"

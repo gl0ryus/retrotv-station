@@ -5,7 +5,7 @@ so the writing job (retrotv.news, in its own venv) uses it as well as the statio
 import os
 
 HOME_DIR = "/home/gl0ryus"
-STATION_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the station folder on the NAS
+STATION_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # the copy running: a release (deploy.py)
 NAS_ROOT = "/mnt/tower/.retrotv"
 MEDIA_ROOT = os.path.join(NAS_ROOT, "videos")
 ASSETS_DIR = os.path.join(HOME_DIR, "retrotv_assets")

@@ -17,20 +17,18 @@ import urllib.error
 import urllib.parse
 
 from retrotv.jsonio import USER_AGENT, get_json, write_json  # USER_AGENT: other modules still import it from here
+from retrotv import brand, cards
+from retrotv.brand import Part
 from retrotv.cards import (
-    ARCHIVO, BARLOW_B, BARLOW_S, BARLOW_X, BLACK, CREAM, H, MUSTARD, SHADOW_RED, SKY, W, WHITE, YELLOW, CHANNEL, WMO,
-    Card, Script, circle, clip_text, clock, esc, fit, info_header, lavfi_url, look, music, rect, text_width,
-    weather_as_of,
+    CREAM, H, SKY, W, WHITE, CHANNEL, WMO,
+    Script, circle, clip_text, clock, info_header, look, music, rect, weather_as_of,
 )
+from retrotv.onthisday import ONTHISDAY_FILE
 from retrotv.paths import ASSETS_DIR, DATA_DIR, HOME_DIR
 
 logger = logging.getLogger("RetroTV")
 
 WORLD_MAP = os.path.join(ASSETS_DIR, "world_110m.json")  # Natural Earth 110m land, simplified
-SPACE_BACKGROUND = "0x060a1e"
-QUIZ_BACKGROUND = "0x1c0a36"
-QUIZ_BAND = "&H00481A30&"
-GREEN = "&H0040C050&"
 FLORIDA_LOCATIONS = (12, 27)  # Cape Canaveral SFS, Kennedy Space Center
 SKY_FILE = os.path.join(DATA_DIR, "sky.json")   # tonight's sky over the house, worked out by retrotv/news.py
 POPUPS_FILE = os.path.join(DATA_DIR, "popups.json")   # Pop-Up Video facts by meta.popup_key, from retrotv/news.py
@@ -62,41 +60,80 @@ def fetch_json(name, url, max_age_minutes, stale_hours=24):
     return None
 
 
-# Average glyph width for mixed-case running text, as a fraction of the font size. The cards'
-# WIDTH_FACTOR is sized for capitals, which wraps sentences far too early
-TEXT_FACTOR = {ARCHIVO: 0.66, BARLOW_X: 0.40, BARLOW_B: 0.38, BARLOW_S: 0.36}
-
-
-def wrap(text, font, size, max_width, max_lines=3):
-    """Word-wraps by estimated width (the scripts use WrapStyle 2, so lines are broken here)."""
-    lines, line = [], ""
-    for word in text.split():
-        trial = f"{line} {word}".strip()
-        if line and len(trial) * size * TEXT_FACTOR[font] > max_width:
-            lines.append(line)
-            line = word
-        else:
-            line = trial
-    if line:
-        lines.append(line)
-    if len(lines) > max_lines:
-        lines = lines[:max_lines]
-        lines[-1] = clip_text(lines[-1] + " …", len(lines[-1]))
-    return lines
-
-
-def starfield(s, d, seed, top=0, count=80):
+def starfield(s, d, seed, top=0, count=80, right=W):
     rnd = random.Random(seed)
     for _ in range(count):
-        x, y = rnd.randrange(16, W - 16), rnd.randrange(top + 8, H - 8)
+        x, y = rnd.randrange(16, right - 16), rnd.randrange(top + 8, H - 8)
         r = rnd.choice((1.2, 1.6, 2.2))
         twinkle = ""
         if rnd.random() < 0.25:
             period = rnd.randint(900, 1800)
             twinkle = "".join(f"\\t({t},{t + period // 2},\\1a&HB0&)\\t({t + period // 2},{t + period},\\1a&H00&)"
                               for t in range(0, int(d * 1000), period))
-        s.shape(0, d, x - r, y - r, circle(r), rnd.choice((WHITE, SKY, CREAM)), fade=(300, 400), layer=0,
+        s.shape(0, d, x - r, y - r, circle(r), rnd.choice((WHITE, SKY, CREAM)), fade=(300, 400), layer=1,
                 extra=twinkle)
+
+
+def _ground(s, d, season):
+    """The info screens' ground: the ink and dotted purple panels, and the season's props."""
+    brand.split(s, d)
+    look(season).dress(s, 0, d, layer=2)
+
+
+def _rows(s, d, rows, tint, top=128, height=86, gap=16, x=62, width=900, start=0.3, step=0.3, lines=1):
+    """Rows on leaning ink slabs with a hard shadow in the accent, like the guide's title bars: [(left, title, sub,
+    right)]. left goes on a yellow box at the start (a year), title in Anton with sub under it (lines: how many
+    lines sub may wrap to), right in yellow at the end. Returns where the last row ends."""
+    y = top
+    for i, (left, title, sub, right) in enumerate(rows):
+        a = start + i * step
+        brand.slab(s, a, d, x, y, width, height, brand.INK, shadow=(6, 6, tint), layer=4, slide=None)
+        tx = x + 24
+        if left:
+            box = 118
+            brand.slab(s, a, d, x, y, box, height, brand.YELLOW, layer=5)
+            brand.words(s, a, d, x + box / 2, y + height / 2, left, brand.ANTON, 40, brand.INK, align="center",
+                        layer=6)
+            tx = x + box + 22
+        room = x + width - tx - 24 - (brand.measure(right, brand.ANTON, 30) + 24 if right else 0)
+        if title and sub:
+            sub_lines = brand.lines(sub, brand.ARCHIVO, 20, room)
+            if len(sub_lines) > lines:
+                sub_lines = sub_lines[:lines - 1] + [brand.clip(" ".join(sub_lines[lines - 1:]), brand.ARCHIVO, 20, room)]
+            block = 34 + 26 * len(sub_lines)
+            ty = y + (height - block) / 2 + 15
+            brand.words(s, a, d, tx, ty, brand.clip(title.upper(), brand.ANTON, 32, room), brand.ANTON, 32, brand.WHITE,
+                        layer=6)
+            for k, line in enumerate(sub_lines):
+                brand.words(s, a, d, tx + 1, ty + 34 + k * 26, line.upper(), brand.ARCHIVO, 20, brand.SILVER, bold=True,
+                            layer=6)
+        elif sub:   # running text alone, up to `lines` lines
+            text = brand.lines(sub, brand.ARCHIVO, 23, room)
+            if len(text) > lines:
+                text = text[:lines - 1] + [brand.clip(" ".join(text[lines - 1:]), brand.ARCHIVO, 23, room)]
+            ty = y + height / 2 - (len(text) - 1) * 30 / 2
+            for k, line in enumerate(text):
+                brand.words(s, a, d, tx, ty + k * 30, line, brand.ARCHIVO, 23, brand.WHITE, bold=True, layer=6)
+        elif title:
+            brand.words(s, a, d, tx, y + height / 2, brand.clip(title.upper(), brand.ANTON, 32, room), brand.ANTON, 32,
+                        brand.WHITE, layer=6)
+        if right:
+            brand.words(s, a, d, x + width - 24, y + height / 2, right, brand.ANTON, 30, brand.YELLOW, align="right",
+                        layer=6)
+        y += height + gap
+    return y
+
+
+def _next_strip(s, d, text, tint=brand.ORANGE, at=1.5):
+    """What follows the card, along the bottom: NEXT on yellow, then what it is."""
+    brand.strip(s, at, d, 62, 532, 42, [Part("NEXT", brand.ANTON, 28, brand.INK, brand.YELLOW, pad=16),
+                                        Part(brand.clip(text.upper(), brand.ARCHIVO_BLACK, 20, 760), brand.ARCHIVO_BLACK,
+                                             20, brand.WHITE, brand.INK, pad=18)],
+                shadow=(5, 5, tint), slide=(int(at * 1000), int(at * 1000) + 400, 90), layer=8)
+
+
+CHECK = "m 0 22 l 10 12 l 24 26 l 52 0 l 62 10 l 24 46"
+
 
 
 # --- Holidays and heritage months ---
@@ -321,57 +358,53 @@ def pop_quiz(season=None, month=None):
         category = look(q["topic"]).title
     else:
         category = QUIZ_CATEGORIES.get(q.get("category_id"), q["category"].split(": ")[-1])
+    tint = look(season).tint
     out = (300, 400)
     s = Script()
-
-    info_header(s, d, [(0, d, f"Pop Quiz · {category}")], None, band=QUIZ_BAND, season=season, ticking=False)
-    # Countdown dial, where the other screens have their clock
-    s.shape(0, d, 900 - 50, 96 - 50, circle(50), MUSTARD, fade=out, layer=1)
-    s.shape(0, d, 900 - 44, 96 - 44, circle(44), "&H00360A1C&", fade=out, layer=2)
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, f"Pop Quiz · {category}")], None, season=season, ticking=False)
+    # The countdown dial, where the other screens have their date
+    cx, cy = 900, 62
+    s.shape(0, d, cx - 46, cy - 46, circle(46), brand.YELLOW, fade=out, layer=4)
+    s.shape(0, d, cx - 38, cy - 38, circle(38), brand.INK, fade=out, layer=5)
     count = int(reveal - start)
     for i in range(count):
-        s.text(start + i, start + i + 1, 900, 98, str(count - i), ARCHIVO, 50, YELLOW, fade=None, layer=3)
-    s.text(reveal, d, 900, 98, "✓", BARLOW_X, 64, GREEN, fade=(150, 400), layer=3)
-    # Timer bar shrinking to the left
-    s.shape(0, d, 80, 318, rect(864, 8), "&H00402040&", fade=out, layer=1)
-    s.shape(start, reveal, 80, 318, rect(864, 8), MUSTARD, fade=None, layer=2,
+        brand.words(s, start + i, start + i + 1, cx, cy, str(count - i), brand.ANTON, 46, brand.WHITE, align="center",
+                    fade=None, layer=6)
+    brand.shape(s, reveal, d, cx - 21, cy - 16, CHECK, brand.TEAL, fade=(150, 400), layer=6,
+                extra="\\fscx68\\fscy68")
+    # The question, and the timer bar shrinking to the left under it
+    lines, em = cards.wrapped(q["question"], brand.ARCHIVO, 30, 880, lines=3, least=0.8)
+    for i, line in enumerate(lines):
+        brand.words(s, 0, d, W / 2, 196 + (i - (len(lines) - 1) / 2) * em * 1.25, line, brand.ARCHIVO, em,
+                    brand.WHITE, align="center", bold=True, fade=(400, 400), layer=6)
+    s.shape(0, d, 72, 262, rect(880, 8), brand.PANEL, fade=out, layer=4)
+    s.shape(start, reveal, 72, 262, rect(880, 8), brand.YELLOW, fade=None, layer=5,
             extra=f"\\t(0,{int((reveal - start) * 1000)},\\fscx0)")
 
-    size = 44
-    lines = wrap(q["question"], BARLOW_B, size, 860)
-    if len(lines) > 2:
-        size = 38
-        lines = wrap(q["question"], BARLOW_B, size, 860)
-    # Multi-line text goes in raw, since esc() would turn the \N line breaks into "/N"
-    s.raw(0, d, f"\\an5\\pos(512,245)\\fn{BARLOW_B}\\fs{size}\\c{CREAM}\\bord0\\shad2\\4c{BLACK}\\fad(400,400)",
-          "\\N".join(esc(l) for l in lines), layer=2)
-
     for i, answer in enumerate(answers):
-        x = 70 if i % 2 == 0 else 522
-        y = 346 if i < 2 else 450
+        x = 66 if i % 2 == 0 else 536
+        y = 296 if i < 2 else 404
+        w, h = 424, 88
         t_in = 0.8 + i * 0.2
-        s.shape(t_in, d, x - 3, y - 3, rect(438, 92), MUSTARD, fade=out, layer=1)
-        s.shape(t_in, d, x, y, rect(432, 86), "&H00602040&", fade=out, layer=2)
+        brand.slab(s, t_in, d, x, y, w, h, brand.INK, shadow=(6, 6, tint), fade=out, layer=4)
+        brand.slab(s, t_in, d, x, y, 64, h, brand.YELLOW, fade=out, layer=5)
+        brand.words(s, t_in, d, x + 32, y + h / 2, "ABCD"[i], brand.ANTON, 40, brand.INK, align="center", fade=out,
+                    layer=7)
         if i == correct:
-            s.shape(reveal, d, x, y, rect(432, 86), GREEN, fade=(150, 400), layer=3)
-            s.shape(reveal, reveal + 0.35, x - 3, y - 3, rect(438, 92), WHITE, fade=(0, 300), layer=6)
+            brand.slab(s, reveal, d, x + 64, y, w - 64, h, brand.TEAL, fade=(150, 400), layer=5)
         else:
-            s.shape(reveal, d, x - 3, y - 3, rect(438, 92), "&H00000000&", fade=(200, 400), layer=6,
-                    extra="\\1a&H70&")
-        s.shape(t_in, d, x + 18, y + 17, circle(26), MUSTARD, fade=out, layer=4)
-        s.text(t_in, d, x + 44, y + 45, "ABCD"[i], ARCHIVO, 34, "&H00200A1C&", fade=out, layer=5)
-        answer = clip_text(answer, 44)
-        asize = fit(answer, BARLOW_B, 40, 330)
-        alines = [answer]
-        if asize < 32:
-            alines = wrap(answer, BARLOW_B, 32, 330, max_lines=2)
-            asize = 32
-        s.raw(t_in, d, f"\\an4\\pos({x + 88},{y + 45})\\fn{BARLOW_B}\\fs{asize}\\c{WHITE}\\bord0\\shad1"
-                       f"\\4c{BLACK}\\fad(300,400)", "\\N".join(esc(l) for l in alines), layer=5)
+            brand.slab(s, reveal, d, x, y, w, h, brand.INK, fade=(200, 400), layer=8)
+        alines, aem = cards.wrapped(answer, brand.ARCHIVO_BLACK, 22, w - 64 - 40, lines=2, least=0.8)
+        ink = brand.WHITE
+        for k, line in enumerate(alines):
+            ty = y + h / 2 + (k - (len(alines) - 1) / 2) * aem * 1.25
+            brand.words(s, t_in, reveal, x + 84, ty, line, brand.ARCHIVO_BLACK, aem, ink, fade=(300, 0), layer=7)
+            brand.words(s, reveal, d, x + 84, ty, line, brand.ARCHIVO_BLACK, aem,
+                        brand.INK if i == correct else brand.GREY, fade=(0, 400), layer=9)
     if q.get("source"):   # the credit its licence asks for
-        s.text(0.8, d, 512, 572, f"QUESTION FROM {q['source'].upper()}", BARLOW_B, 24, "&H00B0A8B8&", spacing=1,
-               fade=out, layer=3)
-    return s.card("quiz", d, music("quiz_bed.ogg"), background=QUIZ_BACKGROUND, card_kind="quiz")
+        brand.footer(s, d, f"Question from {q['source']}", y=560)
+    return s.card("quiz", d, music("quiz_bed.ogg"), background=brand.INK_BG, card_kind="quiz")
 
 
 # --- Today in History ---
@@ -443,27 +476,22 @@ def today_in_history(now, season=None, month=None):
         return None
     page = 24.0
     d = page * (2 if born else 1)
+    tint = look(season).tint
     s = Script()
-    date = now.strftime("%B %-d")
-    pages = [(0, page, f"Today in History · {date}")]
+    _ground(s, d, season)
+    pages = [(0.0, page, "Today in History")]
     if born:
-        pages.append((page, d, f"Born on {date}"))
+        pages.append((page, d, "Born Today"))
     kicker = f"{CHANNEL} · {look(topic).title.upper()}" if on_topic else CHANNEL
-    info_header(s, d, pages, now, band="&H0018283C&", kicker=kicker, season=season)
-    fade = (300, 300)
-    for i, (year, text) in enumerate(events):
-        y = 238 + i * 108
-        s.text(0.3 + i * 0.3, page, 80, y, str(year), ARCHIVO, 48, MUSTARD, align=4, shadow=3, fade=fade, layer=3)
-        lines = wrap(text, BARLOW_S, 32, 690, max_lines=3)
-        s.raw(0.3 + i * 0.3, page, f"\\an4\\pos(250,{y})\\fn{BARLOW_S}\\fs32\\c{CREAM}\\bord0\\shad0\\fad(300,300)",
-              "\\N".join(esc(l) for l in lines), layer=3)
-    for i, (year, name, what, _) in enumerate(born):
-        y = 232 + i * 78
-        a = page + 0.3 + i * 0.3
-        s.text(a, d, 80, y, str(year), ARCHIVO, 40, MUSTARD, align=4, shadow=3, fade=fade, layer=3)
-        name = clip_text(name, 34)
-        s.text(a, d, 250, y - 14, name, BARLOW_X, fit(name, BARLOW_X, 40, 690), CREAM, align=4, fade=fade, layer=3)
-        s.text(a, d, 252, y + 20, clip_text(what, 60), BARLOW_S, 28, SKY, align=4, fade=fade, layer=3)
+    info_header(s, d, pages, now, kicker=kicker, season=season)
+    events_page = Script()
+    _rows(events_page, page, [(str(year), None, text, None) for year, text in events], tint, top=124, height=118,
+          gap=16, lines=3)
+    births_page = Script()
+    _rows(births_page, d - page, [(str(year), name, what, None) for year, name, what, _ in born], tint, top=124,
+          height=86, gap=16)
+    s.events += events_page.events
+    s.events += [(layer, a + page, b + page, body) for layer, a, b, body in births_page.events]
     return s.card("history", d, music("history_bed.ogg"), loop=True, card_kind="history")
 
 
@@ -512,6 +540,8 @@ def _when(launch, short=False):
 
 
 def launch_watch(now, season=None):
+    """The guide's Launch Watch: the next launch on the left (its status, the mission, the rocket and pad, and a
+    T-minus clock when the time is firm), three more on the purple side."""
     base = "https://ll.thespacedevs.com/2.3.0/launches/upcoming/?mode=normal"
     world = fetch_json("launches-world", f"{base}&limit=10", max_age_minutes=180)
     florida = fetch_json("launches-florida", f"{base}&limit=4&ordering=net&location__ids=12,27", max_age_minutes=180)
@@ -527,53 +557,63 @@ def launch_watch(now, season=None):
         rest = rest[:2] + [fl_next]
 
     d = 32.0
+    lk = look(season)
     s = Script()
-    starfield(s, d, seed=int(now.timestamp()) // 3600, top=168)
-    info_header(s, d, [(0, d, "Launch Watch")], now, band="&H00301408&", season=season)
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, "Launch Watch")], now, season=season)
     fade = (300, 400)
-    s.text(0.2, d, 80, 204, "NEXT LAUNCH", BARLOW_X, 28, MUSTARD, align=4, spacing=6, fade=fade, layer=3)
-    mission = clip_text(featured["mission"], 34)
-    s.text(0.3, d, 80, 254, mission, BARLOW_X, fit(mission, BARLOW_X, 56, 560), WHITE, align=4, shadow=3,
-           shadow_color=BLACK, fade=fade, layer=3)
-    s.text(0.5, d, 80, 306, clip_text(f"{featured['rocket']} · {featured['provider']}", 40), BARLOW_B, 34,
-           MUSTARD, align=4, fade=fade, layer=3)
-    s.text(0.6, d, 80, 346, clip_text(f"{featured['pad']} · {featured['place']}", 50), BARLOW_S, 30, SKY,
-           align=4, fade=fade, layer=3)
-
     status = featured["status"].upper()
-    chip = {"GO": GREEN, "TBC": "&H0030B0E0&", "SUCCESS": GREEN}.get(status, "&H00706868&")
-    chip_w = int(text_width(status, BARLOW_X, 30)) + 36
-    s.shape(0.4, d, 944 - chip_w, 188, rect(chip_w, 40), chip, fade=fade, layer=3)
-    s.text(0.4, d, 944 - chip_w / 2, 209, status, BARLOW_X, 30, WHITE, fade=fade, layer=4)
+    brand.strip(s, 0.2, d, 60, 126, 38, [Part("NEXT LAUNCH", brand.ANTON, 26, brand.INK, brand.YELLOW, pad=16),
+                                         Part(status, brand.ARCHIVO_BLACK, 18, brand.INK,
+                                              brand.TEAL if status in ("GO", "SUCCESS") else lk.tint, pad=14)],
+                fade=fade, slide=(200, 600, 90))
+    lines, em = cards.wrapped(featured["mission"].upper(), brand.ANTON, 58, 520)
+    y = 204
+    for i, line in enumerate(lines):
+        brand.words(s, 0.3, d, 56, y + i * em, line, brand.ANTON, em, brand.WHITE, fade=fade, slide=(300, 700, 90))
+    y += (len(lines) - 1) * em + em / 2 + 26
+    brand.words(s, 0.5, d, 58, y, brand.clip(f"{featured['rocket']} · {featured['provider']}".upper(),
+                                             brand.ARCHIVO_BLACK, 21, 520), brand.ARCHIVO_BLACK, 21, brand.WHITE,
+                fade=fade)
+    brand.words(s, 0.6, d, 58, y + 32, brand.clip(f"{featured['pad']}, {featured['place']}".upper(), brand.ARCHIVO,
+                                                  19, 520), brand.ARCHIVO, 19, brand.SILVER, bold=True, fade=fade)
+    top = y + 62
     precise = featured["precision"] in ("", "SEC", "MIN", "HR", "S", "Second", "Minute", "Hour")
+    brand.slab(s, 0.7, d, 62, top, 500, 86, brand.PURPLE, shadow=(7, 7, brand.YELLOW), fade=fade, layer=4)
     if precise and featured["net"] > aware:
-        s.text(0.5, d, 944, 262, "T-MINUS", BARLOW_X, 28, SKY, align=6, spacing=4, fade=fade, layer=3)
+        brand.words(s, 0.7, d, 86, top + 43, "T-MINUS", brand.ANTON, 28, brand.YELLOW, fade=fade, layer=6)
         for sec in range(int(d) + 1):
             left = int((featured["net"] - aware).total_seconds()) - sec
             if left < 0:
                 break
             days, rem = divmod(left, 86400)
             text = (f"{days}D " if days else "") + f"{rem // 3600:02d}:{rem // 60 % 60:02d}:{rem % 60:02d}"
-            s.text(sec, min(d, sec + 1), 944, 310, text, ARCHIVO, 46, YELLOW, align=6, shadow=3,
-                   shadow_color=BLACK, fade=None, layer=3)
-        s.text(0.6, d, 944, 352, _when(featured), BARLOW_B, 30, CREAM, align=6, fade=fade, layer=3)
+            brand.words(s, sec, min(d, sec + 1), 538, top + 43, text, brand.ANTON, 60, brand.WHITE, align="right",
+                        fade=None, layer=6)
+        brand.strip(s, 0.8, d, 66, top + 104, 36, [Part(_when(featured), brand.ARCHIVO_BLACK, 19, brand.WHITE, pad=16,
+                                                        border=(3, brand.WHITE))], fade=fade)
     else:
-        s.text(0.5, d, 944, 262, "NO EARLIER THAN", BARLOW_X, 28, SKY, align=6, spacing=4, fade=fade, layer=3)
-        s.text(0.5, d, 944, 312, _when(featured), ARCHIVO, 44, YELLOW, align=6, shadow=3, shadow_color=BLACK,
-               fade=fade, layer=3)
+        brand.words(s, 0.7, d, 86, top + 43, "NO EARLIER THAN", brand.ANTON, 28, brand.YELLOW, fade=fade, layer=6)
+        brand.words(s, 0.7, d, 538, top + 43, _when(featured), brand.ANTON, 46, brand.WHITE, align="right", fade=fade,
+                    layer=6)
 
-    s.shape(0.8, d, 80, 384, rect(864, 3), MUSTARD, fade=fade, layer=3)
-    s.text(0.9, d, 80, 414, "ALSO COMING UP", BARLOW_X, 28, MUSTARD, align=4, spacing=6, fade=fade, layer=3)
+    brand.strip(s, 0.9, d, 700, 134, 36, [Part("ALSO COMING UP", brand.ANTON, 24, brand.INK, brand.YELLOW, pad=14)],
+                shadow=(5, 5, brand.INK), fade=fade, layer=6)
     for i, l in enumerate(rest):
-        y = 452 + i * 38
-        a = 1.0 + i * 0.2
-        color = MUSTARD if l["florida"] else SKY
-        s.text(a, d, 80, y, _when(l, short=True), BARLOW_X, 30, YELLOW, align=4, fade=fade, layer=3)
-        what = clip_text(f"{l['rocket']} · {l['mission']}", 46)
-        s.text(a, d, 230, y, what, BARLOW_B, fit(what, BARLOW_B, 30, 470), WHITE, align=4, fade=fade, layer=3)
-        place = ("★ " if l["florida"] else "") + clip_text(l["place"], 24)
-        s.text(a, d, 944, y, place, BARLOW_S, fit(place, BARLOW_S, 28, 250), color, align=6, fade=fade, layer=3)
-    return s.card("launch", d, music("space_bed.ogg"), background=SPACE_BACKGROUND, card_kind="launch")
+        y, a = 184 + i * 92, 1.0 + i * 0.2
+        brand.slab(s, a, d, 694, y, 272, 78, brand.INK, shadow=(6, 6, brand.INK), fade=fade, layer=6)
+        brand.slab(s, a, d, 694, y, 74, 78, brand.YELLOW, fade=fade, layer=7)
+        month, _, day = _when(l, short=True).partition(" ")
+        brand.words(s, a, d, 731, y + (25 if day else 39), month, brand.ANTON, 24, brand.INK, align="center", fade=fade,
+                    layer=8)
+        if day:
+            brand.words(s, a, d, 731, y + 54, day, brand.ANTON, 24, brand.INK, align="center", fade=fade, layer=8)
+        brand.words(s, a, d, 782, y + 27, brand.clip(l["mission"].upper(), brand.ANTON, 25, 172), brand.ANTON, 25,
+                    brand.WHITE, fade=fade, layer=8)
+        brand.words(s, a, d, 783, y + 56, brand.clip(f"{l['rocket']} · {l['place']}".upper(), brand.ARCHIVO, 16, 172),
+                    brand.ARCHIVO, 16, brand.YELLOW if l["florida"] else brand.SILVER, bold=True, fade=fade, layer=8)
+    brand.footer(s, d, "Source: The Space Devs · Florida in yellow")
+    return s.card("launch", d, music("space_bed.ogg"), background=brand.INK_BG, card_kind="launch")
 
 
 # --- Tonight's Sky ---
@@ -582,7 +622,7 @@ COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
 MOON_PHASES = ((22.5, "New moon"), (67.5, "Waxing crescent"), (112.5, "First quarter"), (157.5, "Waxing gibbous"),
                (202.5, "Full moon"), (247.5, "Waning gibbous"), (292.5, "Last quarter"), (337.5, "Waning crescent"),
                (360.1, "New moon"))
-MOON_LIT, MOON_DARK = "&H00C8E6F0&", "&H00402C26&"
+MOON_LIT, MOON_DARK = "&H00D8F0F8&", "&H004A3F3A&"
 
 
 def _compass(azimuth):
@@ -612,8 +652,8 @@ def _moon(phase, r):
 
 
 def tonight_sky(now, season=None):
-    """The moon, the planets out tonight and the next ISS pass you can see, from SKY_FILE; None outside the
-    evening it was worked out for."""
+    """The guide's Tonight's Sky: the moon and its phase, sunset and the next ISS pass you can see on the left, the
+    planets out tonight on the purple side; from SKY_FILE, None outside the evening it was worked out for."""
     try:
         with open(SKY_FILE) as f:
             sky = json.load(f)
@@ -624,59 +664,64 @@ def tonight_sky(now, season=None):
     at = datetime.datetime.fromtimestamp
     d = 24.0
     s = Script()
-    starfield(s, d, seed=int(now.timestamp()) // 3600, top=168)
-    info_header(s, d, [(0, d, "Tonight's Sky")], now, band="&H00301408&", season=season)
+    _ground(s, d, season)
+    starfield(s, d, seed=int(now.timestamp()) // 3600, top=100, count=50, right=560)
+    info_header(s, d, [(0, d, "Tonight's Sky")], now, season=season)
     fade = (300, 400)
 
     moon = sky["moon"]
-    r, cx, cy = 74, 200, 300
+    r, cx, cy = 66, 136, 222
     for path, dx, dy, colour in _moon(moon["phase"], r):
-        s.shape(0.3, d, cx - r + dx, cy - r + dy, path, colour, fade=fade, layer=3)
+        s.shape(0.3, d, cx - r + dx, cy - r + dy, path, colour, fade=fade, layer=4)
     name = next(n for limit, n in MOON_PHASES if moon["phase"] < limit)
-    s.text(0.4, d, cx, 412, name.upper(), BARLOW_X, 34, YELLOW, fade=fade, layer=3)
-    s.text(0.5, d, cx, 450, f"{moon['lit']}% LIT", BARLOW_S, 30, SKY, spacing=2, fade=fade, layer=3)
-    s.text(0.6, d, cx, 510, f"SUNSET {clock(at(sky['sunset']))}", BARLOW_X, 30, MUSTARD, spacing=3, fade=fade,
-           layer=3)
-
-    x = 420
-    s.text(0.5, d, x, 206, "PLANETS OUT TONIGHT", BARLOW_X, 30, MUSTARD, align=4, spacing=5, fade=fade, layer=3)
-    planets = sky["planets"][:3]
-    for i, p in enumerate(planets):
-        y, a = 254 + i * 50, 0.7 + i * 0.2
-        s.text(a, d, x, y, p["name"].upper(), ARCHIVO, 34, WHITE, align=4, shadow=3, shadow_color=BLACK,
-               fade=fade, layer=3)
-        s.text(a, d, 640, y, clock(at(p["time"])), BARLOW_X, 32, YELLOW, align=4, fade=fade, layer=3)
-        where = f"{_height(p['alt'])} in the {_compass(p['az'])}".upper()
-        s.text(a, d, 944, y, where, BARLOW_B, fit(where, BARLOW_B, 32, 180), SKY, align=6, fade=fade, layer=3)
-    if not planets:
-        s.text(0.7, d, x, 254, "NONE UP AFTER DARK TONIGHT", BARLOW_B, 32, SKY, align=4, fade=fade, layer=3)
-
-    s.shape(0.9, d, x, 412, rect(944 - x, 3), MUSTARD, fade=fade, layer=3)
-    s.text(1.0, d, x, 444, "SPACE STATION", BARLOW_X, 30, MUSTARD, align=4, spacing=5, fade=fade, layer=3)
+    brand.strip(s, 0.4, d, 236, 150, 34, [Part("MOON", brand.ANTON, 24, brand.INK, brand.YELLOW, pad=14)], fade=fade)
+    lines, em = cards.wrapped(name.upper(), brand.ANTON, 50, 320)
+    for i, line in enumerate(lines):
+        brand.words(s, 0.5, d, 232, 214 + i * em, line, brand.ANTON, em, brand.WHITE, fade=fade)
+    brand.words(s, 0.6, d, 234, 214 + (len(lines) - 1) * em + em / 2 + 22, f"{moon['lit']}% LIT", brand.ARCHIVO_BLACK,
+                21, brand.WHITE, fade=fade)
+    brand.strip(s, 0.7, d, 62, 330, 44, [Part("SUNSET", brand.ANTON, 28, brand.INK, brand.YELLOW, pad=16),
+                                        Part(clock(at(sky["sunset"])), brand.ARCHIVO_BLACK, 21, brand.INK, brand.WHITE,
+                                             pad=18)], shadow=(6, 6, brand.PURPLE), fade=fade)
     passes = [p for p in sky["iss"] if p["peak"] > now.timestamp()]
     if passes:
         p = passes[0]
         when = at(p["rise"])
         day = "TONIGHT" if when < at(sky["until"]) else when.strftime("%a").upper()
-        s.text(1.1, d, x, 490, f"{day} {clock(when)}", ARCHIVO, 36, YELLOW, align=4, shadow=3,
-               shadow_color=BLACK, fade=fade, layer=3)
-        path = f"{_compass(p['rise_az'])} TO {_compass(p['set_az'])} · {round(p['peak_alt'])}° UP"
-        s.text(1.2, d, 944, 490, path, BARLOW_B, 32, SKY, align=6, fade=fade, layer=3)
-        s.text(1.3, d, x, 534, f"ABOUT {max(1, round((p['set'] - p['rise']) / 60))} MINUTES, LOOK "
-               f"{_compass(p['rise_az'])} FIRST", BARLOW_S, 28, CREAM, align=4, spacing=1, fade=fade, layer=3)
+        detail = (f"{day} {clock(when)} · {max(1, round((p['set'] - p['rise']) / 60))} MIN · "
+                  f"{_compass(p['rise_az'])} TO {_compass(p['set_az'])}")
     else:
-        s.text(1.1, d, x, 490, "NO EVENING PASSES YOU CAN SEE", BARLOW_B, 32, SKY, align=4, fade=fade, layer=3)
-        s.text(1.2, d, x, 534, "IN THE NEXT 3 DAYS", BARLOW_S, 28, CREAM, align=4, spacing=1, fade=fade, layer=3)
-    return s.card("sky", d, music("space_bed.ogg"), background=SPACE_BACKGROUND, loop=True, card_kind="sky")
+        detail = "NONE YOU CAN SEE IN THE NEXT 3 DAYS"
+    brand.strip(s, 0.9, d, 62, 404, 52, [Part("ISS FLYOVER", brand.ANTON, 30, brand.YELLOW, brand.PURPLE, pad=18),
+                                        Part(brand.clip(detail, brand.ARCHIVO_BLACK, 19, 330), brand.ARCHIVO_BLACK, 19,
+                                             brand.WHITE, brand.PURPLE, pad=14)],
+                shadow=(6, 6, brand.YELLOW), fade=fade)
+    if passes:
+        brand.words(s, 1.0, d, 66, 486, f"LOOK {_compass(passes[0]['rise_az'])} FIRST · {round(passes[0]['peak_alt'])}° UP AT ITS HIGHEST",
+                    brand.ARCHIVO, 19, brand.SILVER, bold=True, fade=fade)
+
+    brand.strip(s, 0.5, d, 700, 134, 36, [Part("LOOK UP", brand.ANTON, 24, brand.INK, brand.YELLOW, pad=14)],
+                shadow=(5, 5, brand.INK), fade=fade, layer=6)
+    planets = sky["planets"][:4]
+    for i, p in enumerate(planets):
+        y, a = 184 + i * 86, 0.7 + i * 0.2
+        brand.slab(s, a, d, 694, y, 272, 72, brand.INK, shadow=(6, 6, brand.INK), fade=fade, layer=6)
+        brand.words(s, a, d, 716, y + 26, p["name"].upper(), brand.ANTON, 30, brand.WHITE, fade=fade, layer=8)
+        where = f"{_height(p['alt'])} in the {_compass(p['az'])} · best {clock(at(p['time']))}".upper()
+        brand.words(s, a, d, 717, y + 54, brand.clip(where, brand.ARCHIVO, 16, 228), brand.ARCHIVO, 16, brand.SILVER,
+                    bold=True, fade=fade, layer=8)
+    if not planets:
+        brand.slab(s, 0.7, d, 694, 184, 272, 72, brand.INK, shadow=(6, 6, brand.INK), fade=fade, layer=6)
+        brand.words(s, 0.7, d, 716, 220, "NONE UP AFTER DARK", brand.ANTON, 28, brand.WHITE, fade=fade, layer=8)
+    brand.footer(s, d, "Times are local")
+    return s.card("sky", d, music("space_bed.ogg"), background=brand.INK_BG, loop=True, card_kind="sky")
 
 
 # --- Markets ---
 
-MARKET_BACKGROUND = "0x08140c"
-UP, DOWN = "&H005AE66E&", "&H006060FF&"  # bright enough to read as text on the dark background
 COINGECKO = "https://api.coingecko.com/api/v3/coins/{}/market_chart?vs_currency=usd&days=1"
 SPX_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/%5EGSPC?range=1d&interval=5m"
-CHART_W, CHART_H = 200, 66
+CHART_W, CHART_H = 232, 92
 
 
 def _crypto(coin):
@@ -690,7 +735,7 @@ def _crypto(coin):
 
 def _spx():
     """(level, change % since the previous close, today's levels from that close, quote time) or None.
-    Out of market hours this is the last session's, which the footer says."""
+    Out of market hours this is the last session's, which the card says."""
     data = fetch_json("markets-spx", SPX_CHART, max_age_minutes=10, stale_hours=96)
     try:
         r = data["chart"]["result"][0]
@@ -718,57 +763,69 @@ def _chart_paths(history):
 
 
 def markets(now, season=None):
-    """BTC, ETH and the S&P 500: price, change and a chart of the last 24 hours (the S&P's session so far,
-    from the previous close). None when no quote is available at all."""
+    """The guide's Markets: a card each for BTC, ETH and the S&P 500 with the price, the change (on yellow when
+    it's up, white when it's down) and a chart of the last 24 hours (the S&P's session so far, from the previous
+    close). None when no quote is available at all."""
     # Whole dollars and points: cents are noise at TV resolution and only shrink the numbers
     rows = [(symbol, name, quote, fmt) for symbol, name, quote, fmt in (
         ("BTC", "Bitcoin", _crypto("bitcoin"), "${:,.0f}"),
         ("ETH", "Ethereum", _crypto("ethereum"), "${:,.0f}"),
-        ("S&P 500", None, _spx(), "{:,.0f}"),
+        ("S&P 500", "Index", _spx(), "{:,.0f}"),
     ) if quote]
     if not rows:
         return None
     d = 24.0
+    tint = look(season).tint
     s = Script()
-    info_header(s, d, [(0, d, "Markets")], now, band="&H00142410&", season=season)
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, "Markets")], now, season=season)
     fade = (300, 400)
-    s.text(0.2, d, 320, 206, "LAST 24 HOURS", BARLOW_X, 30, MUSTARD, align=4, spacing=4, fade=fade, layer=3)
-    s.text(0.2, d, 944, 206, "CHANGE", BARLOW_X, 30, MUSTARD, align=6, spacing=4, fade=fade, layer=3)
+    w, gap = 288, 24
+    left = W / 2 - (len(rows) * w + (len(rows) - 1) * gap) / 2
     for i, (symbol, name, (price, change, history, when), fmt) in enumerate(rows):
-        y, a = 268 + i * 104, 0.3 + i * 0.25
-        color = UP if change >= 0 else DOWN
-        s.shape(a, d, 80, y + 50, rect(864, 2), "&H00304030&", fade=fade, layer=1)
-        s.text(a, d, 80, y - 16, symbol, ARCHIVO, fit(symbol, ARCHIVO, 48, 220), WHITE, align=4, shadow=3,
-               shadow_color=BLACK, fade=fade, layer=3)
-        # The S&P's quote time stands in for its name: out of market hours it is the last session's
-        if name:
-            sub = name.upper()
-        else:
+        x, a = left + i * (w + gap), 0.3 + i * 0.25
+        top, h = 124, 392
+        brand.shape(s, a, d, x + 10, top + 10, rect(w, h), tint, fade=fade, layer=3)
+        brand.shape(s, a, d, x, top, rect(w, h), brand.PANEL, fade=fade, layer=4)
+        brand.shape(s, a, d, x, top, rect(w, 74), brand.YELLOW, fade=fade, layer=5)
+        em = brand.shrink(symbol, brand.ANTON, 50, 150)
+        brand.words(s, a, d, x + 18, top + 37, symbol, brand.ANTON, em, brand.INK, fade=fade, layer=6)
+        # The S&P's quote time stands in for its name out of market hours: it is the last session's
+        sub = name.upper()
+        if when:
             sub = (when.strftime("AS OF %-I:%M %p") if when.date() == now.date()
                    else when.strftime("%a %-I:%M %p").upper())
-        s.text(a, d, 80, y + 28, sub, BARLOW_X, fit(sub, BARLOW_X, 30, 230, spacing=2), SKY, align=4, spacing=2,
-               fade=fade, layer=3)
-        area, ribbon = _chart_paths(history)
-        s.shape(a, d, 320, y - CHART_H / 2, area, color, fade=fade, layer=2, extra="\\1a&HA0&")
-        s.shape(a, d, 320, y - CHART_H / 2, ribbon, color, fade=fade, layer=3)
+        brand.words(s, a, d, x + w - 16, top + 37, sub, brand.ARCHIVO_BLACK, 15, brand.INK, align="right", fade=fade,
+                    layer=6)
         text = fmt.format(price)
-        s.text(a, d, 760, y, text, BARLOW_X, fit(text, BARLOW_X, 64, 220), YELLOW, align=6, shadow=3,
-               shadow_color=BLACK, fade=fade, layer=3)
+        brand.words(s, a, d, x + 18, top + 124, text, brand.ANTON, brand.shrink(text, brand.ANTON, 54, w - 36),
+                    brand.WHITE, fade=fade, layer=6)
+        up = change >= 0
         pct = f"{abs(change):.2f}%"
-        size = fit(pct, BARLOW_X, 50, 140)
-        arrow = "m 11 0 l 22 18 l 0 18" if change >= 0 else "m 0 0 l 22 0 l 11 18"
-        s.shape(a, d, 806, y - 9, arrow, color, fade=fade, layer=3)
-        s.text(a, d, 944, y, pct, BARLOW_X, size, color, align=6, shadow=2, shadow_color=BLACK, fade=fade, layer=3)
+        chip = brand.measure(pct, brand.ARCHIVO_BLACK, 21) + 54
+        brand.shape(s, a, d, x + 18, top + 168, rect(chip, 38), brand.YELLOW if up else brand.WHITE, fade=fade, layer=6)
+        arrow = "m 8 0 l 16 13 l 0 13" if up else "m 0 0 l 16 0 l 8 13"
+        brand.shape(s, a, d, x + 30, top + 180, arrow, brand.INK, fade=fade, layer=7)
+        brand.words(s, a, d, x + 54, top + 187, pct, brand.ARCHIVO_BLACK, 21, brand.INK, fade=fade, layer=7)
+        brand.words(s, a, d, x + 18 + chip + 12, top + 187, "TODAY" if symbol == "S&P 500" else "24H",
+                    brand.ARCHIVO_BLACK, 17, brand.SILVER, fade=fade, layer=6)
+        area, ribbon = _chart_paths(history)
+        color = brand.TEAL if up else brand.PINK
+        brand.shape(s, a, d, x + 28, top + 236, area, color, fade=fade, layer=6, extra="\\1a&HA0&")
+        brand.shape(s, a, d, x + 28, top + 236, ribbon, color, fade=fade, layer=7)
+        lo, hi = min(history), max(history)
+        brand.words(s, a, d, x + 18, top + h - 26, f"HIGH {fmt.format(hi)} · LOW {fmt.format(lo)}", brand.ARCHIVO, 16,
+                    brand.SILVER, bold=True, fade=fade, layer=6)
     sources = "CoinGecko"
     if any(sym == "S&P 500" for sym, *_ in rows):
-        sources = "S&P 500 change vs. prior close · CoinGecko · Yahoo Finance"
-    s.text(0.8, d, 512, 566, sources.upper(), BARLOW_B, 28, "&H00B0B8B0&", spacing=1, fade=fade, layer=3)
-    return s.card("markets", d, music("weather_bed.ogg"), background=MARKET_BACKGROUND, loop=True, card_kind="markets")
+        sources = "S&P vs. prior close · CoinGecko · Yahoo Finance"
+    brand.footer(s, d, sources)
+    return s.card("markets", d, music("weather_bed.ogg"), background=brand.INK_BG, loop=True, card_kind="markets")
 
 
 # --- Art Break ---
 
-ART_X, ART_Y = (W - ART_W) // 2, 186
+ART_X, ART_Y = (W - ART_W) // 2, 128
 ART_PATH = re.compile(r"^[mnlbsc0-9.\s-]+$")
 
 
@@ -787,7 +844,7 @@ def placed(path):
 
 def art_break(now, season=None):
     """Art Break: the day's picture from ART_FILE drawn shape by shape, back to front, like an old paint
-    program, then held under its caption. None without a picture for today."""
+    program, on a white canvas with a hard shadow, then held over its caption. None without a picture for today."""
     try:
         with open(ART_FILE) as f:
             art = json.load(f)
@@ -798,20 +855,26 @@ def art_break(now, season=None):
     shapes = art["shapes"]
     d = 24.0
     draw = min(14.0, 0.35 * len(shapes))   # the drawing, then the finished picture held
+    tint = look(season).tint
     s = Script()
-    info_header(s, d, [(0, d, "Art Break")], now, band="&H00402818&", season=season)
-    s.shape(0, d, ART_X - 6, ART_Y - 6, rect(ART_W + 12, ART_H + 12), "&H00E8E8E8&", fade=(300, 400), layer=1)
-    s.shape(0, d, ART_X, ART_Y, rect(ART_W, ART_H), "&H00FFFFFF&", fade=(300, 400), layer=1)
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, "Art Break")], now, season=season)
+    s.shape(0, d, ART_X - 8 + 12, ART_Y - 8 + 12, rect(ART_W + 16, ART_H + 16), tint, fade=(300, 400), layer=3)
+    s.shape(0, d, ART_X - 8, ART_Y - 8, rect(ART_W + 16, ART_H + 16), brand.WHITE, fade=(300, 400), layer=4)
     for i, shape in enumerate(shapes):
         a = 0.8 + draw * i / len(shapes)
         path, x0, y0 = placed(shape["path"])
         r, g, b = (int(shape["color"][k:k + 2], 16) for k in (1, 3, 5))
-        s.shape(a, d, ART_X + x0, ART_Y + y0, path, f"&H00{b:02X}{g:02X}{r:02X}&", fade=(180, 400), layer=2,
+        s.shape(a, d, ART_X + x0, ART_Y + y0, path, f"&H00{b:02X}{g:02X}{r:02X}&", fade=(180, 400), layer=5,
                 extra="\\clip(" + f"{ART_X},{ART_Y},{ART_X + ART_W},{ART_Y + ART_H})")
     caption = art.get("title", "").upper()
-    s.text(draw + 1.2, d, W // 2, ART_Y + ART_H + 1, caption, BARLOW_X, fit(caption, BARLOW_X, 30, 800), MUSTARD,
-           align=8, spacing=4, fade=(400, 400), layer=3)
-    return s.card("art", d, music("blurb_vapor1.ogg"), background="0x101418", loop=True, card_kind="art")
+    if caption:
+        em = brand.shrink(caption, brand.ANTON, 30, 760)
+        cw = brand.measure(caption, brand.ANTON, em) + 40
+        brand.strip(s, draw + 1.2, d, W / 2 - cw / 2, ART_Y + ART_H + 30, 46, [Part(caption, brand.ANTON, em, brand.INK,
+                                                                                  brand.YELLOW, pad=20)],
+                    shadow=(6, 6, brand.INK), fade=(400, 400), layer=8)
+    return s.card("art", d, music("blurb_vapor1.ogg"), background=brand.INK_BG, loop=True, card_kind="art")
 
 
 # --- Anniversary Airing ---
@@ -828,29 +891,43 @@ def anniversaries(*days):
 
 def anniversary(info, name, episode, now, season=None):
     """The card before an anniversary airing: how many years ago tonight it first aired, the show and
-    episode, the date, and a line or two on what else was going on that week."""
+    episode, the date, and on the purple side a line or two on what else was going on that week."""
     d = 14.0
+    tint = look(season).tint
     s = Script()
-    info_header(s, d, [(0, d, "From the Vault")], now, band="&H00182838&", season=season)
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, "From the Vault")], now, season=season)
     fade = (300, 400)
     aired = datetime.date.fromisoformat(info["aired"])
     episode = (episode or "").replace(f"{aired:%b} {aired.day}, {aired.year}", "").strip(" ·-")   # the date's below
-    s.text(0.2, d, 80, 214, f"{info['years']} YEARS AGO TONIGHT", BARLOW_X, 32, MUSTARD, align=4, spacing=6,
-           fade=fade, layer=3)
-    s.text(0.5, d, 80, 270, name.upper(), ARCHIVO, fit(name.upper(), ARCHIVO, 54, 864), WHITE, align=4, shadow=3,
-           shadow_color=BLACK, fade=fade, layer=3)
+    brand.words(s, 0.2, d, 56, 150, f"{info['years']} YEARS AGO TONIGHT", brand.ANTON, 44, brand.YELLOW,
+                shadow=(5, 5, brand.PURPLE), fade=fade, slide=(200, 600, 90))
+    lines, em = cards.wrapped(name.upper(), brand.ANTON, 66, 520)
+    y = 234
+    for i, line in enumerate(lines):
+        brand.words(s, 0.5, d, 54, y + i * em, line, brand.ANTON, em, brand.WHITE, fade=fade, slide=(500, 900, 90))
+    y += (len(lines) - 1) * em + em / 2 + 30
     if episode:
-        s.text(0.8, d, 80, 322, clip_text(episode, 50), BARLOW_B, 34, CREAM, align=4, fade=fade, layer=3)
-    s.text(1.0, d, 80, 366 if episode else 326, f"FIRST AIRED {aired:%A, %B} {aired.day}, {aired.year}".upper(),
-           BARLOW_X, 30, SKY, align=4, spacing=2, fade=fade, layer=3)
+        brand.words(s, 0.8, d, 58, y, brand.clip(episode.upper(), brand.ARCHIVO_BLACK, 22, 520), brand.ARCHIVO_BLACK, 22,
+                    brand.WHITE, fade=fade)
+        y += 40
+    first = f"FIRST AIRED {aired:%A, %B} {aired.day}, {aired.year}".upper()
+    brand.strip(s, 1.0, d, 62, y, 38, [Part(first, brand.ARCHIVO_BLACK, 18, brand.INK, tint, pad=16)], fade=fade)
     week = info.get("week") or []
     if week:
-        s.shape(1.4, d, 80, 404, rect(864, 3), MUSTARD, fade=fade, layer=3)
-        s.text(1.5, d, 80, 436, "THAT WEEK", BARLOW_X, 28, MUSTARD, align=4, spacing=6, fade=fade, layer=3)
+        brand.strip(s, 1.4, d, 700, 134, 36, [Part("THAT WEEK", brand.ANTON, 24, brand.INK, brand.YELLOW, pad=14)],
+                    shadow=(5, 5, brand.INK), fade=fade, layer=6)
+        y = 184
         for i, line in enumerate(week[:2]):
-            s.text(1.8 + i * 0.4, d, 80, 478 + i * 42, clip_text(line, 72), BARLOW_B, fit(line, BARLOW_B, 34, 864),
-                   WHITE, align=4, fade=fade, layer=3)
-    return s.card("anniversary", d, music("history_bed.ogg"), background="0x140c06", loop=True, card_kind="anniversary")
+            text = brand.lines(line.upper(), brand.ARCHIVO_BLACK, 18, 236)[:5]
+            h = 26 + len(text) * 26
+            brand.slab(s, 1.6 + i * 0.4, d, 694, y, 272, h, brand.INK, shadow=(6, 6, brand.INK), fade=fade, layer=6)
+            for k, t in enumerate(text):
+                brand.words(s, 1.6 + i * 0.4, d, 716, y + 26 + k * 26, t, brand.ARCHIVO_BLACK, 18, brand.WHITE,
+                            fade=fade, layer=8)
+            y += h + 18
+    return s.card("anniversary", d, music("history_bed.ogg"), background=brand.INK_BG, loop=True,
+                  card_kind="anniversary")
 
 
 # --- Weekly Countdown ---
@@ -882,49 +959,60 @@ def weekly_chart():
 
 
 def countdown(chart, up_first, now, season=None):
-    """The Weekly Countdown: the week's top artists counted down, 10 to 6 down the left and 5 to 2 down
-    the right, then number one in the banner with its song. up_first (rank, artist, song): the video that
-    opens the block after it, named in the banner at the end."""
+    """The guide's Weekly Countdown: the week's top artists counted down the purple side from 10 to 2, then
+    number one big on the left with its song. up_first (rank, artist, song): the video that opens the block
+    after it, named along the bottom at the end."""
     d = COUNTDOWN_SECONDS
+    tint = look(season).tint
     s = Script()
-    info_header(s, d, [(0, d, "Weekly Countdown")], now, band="&H00401028&", season=season)
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, "Weekly Countdown")], now, season=season, ticking=False)
+    monday = now.date() - datetime.timedelta(days=now.weekday())
+    brand.date_chip(s, d, now, text=f"WEEK OF {monday:%b %-d}".upper())
     fade = (250, 300)
-    s.text(0.3, d, 80, 206, "YOUR MOST PLAYED ARTISTS THIS WEEK", BARLOW_X, 28, MUSTARD, align=4, spacing=4,
-           fade=fade, layer=3)
-    s.text(0.3, d, 944, 206, "PLAYS", BARLOW_X, 28, MUSTARD, align=6, spacing=4, fade=fade, layer=3)
+    brand.words(s, 0.3, d, 60, 140, "YOUR MOST PLAYED ARTISTS THIS WEEK", brand.ARCHIVO_BLACK, 18, brand.SILVER,
+                fade=fade)
     step = 1.5
-    for i, (rank, artist, plays, _) in enumerate(sorted((r for r in chart if r[0] > 1), reverse=True)):
+    rest = sorted((r for r in chart if r[0] > 1), reverse=True)
+    for i, (rank, artist, plays, _) in enumerate(rest):
         a = 1.0 + i * step
-        x, row = (80, 10 - rank) if rank >= 6 else (532, 5 - rank)
-        y = 256 + row * 48
-        s.text(a, d, x, y, f"{rank}", ARCHIVO, 30, YELLOW, align=4, shadow=2, shadow_color=BLACK, fade=fade,
-               layer=3)
-        s.text(a, d, x + 58, y, artist.upper(), BARLOW_X, fit(artist.upper(), BARLOW_X, 32, 290), WHITE, align=4,
-               fade=fade, layer=3)
-        s.text(a, d, x + 412, y, str(plays), BARLOW_B, 30, SKY, align=6, fade=fade, layer=3)
+        y = 120 + (rank - 2) * 50
+        brand.slab(s, a, d, 690, y, 278, 42, brand.INK, shadow=(5, 5, brand.INK), fade=fade, layer=6)
+        brand.slab(s, a, d, 690, y, 48, 42, brand.YELLOW, fade=fade, layer=7)
+        brand.words(s, a, d, 714, y + 21, str(rank), brand.ANTON, 28, brand.INK, align="center", fade=fade, layer=8)
+        brand.words(s, a, d, 752, y + 21, brand.clip(artist.upper(), brand.ANTON, 24, 150), brand.ANTON, 24, brand.WHITE,
+                    fade=fade, layer=8)
+        brand.words(s, a, d, 954, y + 21, f"{plays}", brand.ARCHIVO_BLACK, 16, brand.SILVER, align="right", fade=fade,
+                    layer=8)
     top = next((r for r in chart if r[0] == 1), None)
-    reveal = 1.0 + 9 * step + 0.8
+    reveal = 1.0 + len(rest) * step + 0.8
+    until = d - 6.5 if up_first else d
     if top:
-        s.shape(reveal, d, 80, 494, rect(864, 80), MUSTARD, fade=fade, layer=2)
         _, artist, plays, song = top
-        until = d - 6.5 if up_first else d
-        s.text(reveal, until, 104, 534, "#1", ARCHIVO, 48, "&H00200A14&", align=4, fade=fade, layer=3)
-        s.text(reveal + 0.3, until, 196, 520, artist.upper(), ARCHIVO, fit(artist.upper(), ARCHIVO, 40, 560),
-               "&H00200A14&", align=4, fade=fade, layer=3)
-        detail = (f"{song} · " if song else "") + f"{plays} plays"
-        s.text(reveal + 0.6, until, 196, 556, clip_text(detail, 52), BARLOW_B, 30, "&H00200A14&", align=4,
-               fade=fade, layer=3)
+        brand.strip(s, reveal, d, 62, 176, 36, [Part("THIS WEEK'S NO. 1", brand.ANTON, 24, brand.INK, brand.YELLOW,
+                                                     pad=14)], fade=fade)
+        brand.words(s, reveal, d, 52, 300, "1", brand.ANTON, 200, brand.YELLOW, shadow=(9, 9, brand.PURPLE), fade=fade,
+                    extra="\\t(0,250,\\fscx115\\fscy115)\\t(250,450,\\fscx100\\fscy100)")
+        lines, em = cards.wrapped(artist.upper(), brand.ANTON, 54, 400)
+        for i, line in enumerate(lines):
+            brand.words(s, reveal + 0.3, d, 166, 252 + i * em, line, brand.ANTON, em, brand.WHITE, fade=fade)
+        y = 252 + (len(lines) - 1) * em + em / 2 + 26
+        if song:
+            brand.words(s, reveal + 0.5, d, 168, y, brand.clip(song.upper(), brand.ARCHIVO_BLACK, 22, 400),
+                        brand.ARCHIVO_BLACK, 22, brand.YELLOW, fade=fade)
+            y += 40
+        brand.strip(s, reveal + 0.7, d, 172, y, 36, [Part(f"{plays} PLAYS", brand.ARCHIVO_BLACK, 19, brand.WHITE, pad=16,
+                                                          border=(3, brand.WHITE))], fade=fade)
     if up_first:
         rank, artist, song = up_first
-        a = d - 6.5 if top else reveal
-        if not top:
-            s.shape(a, d, 80, 494, rect(864, 80), MUSTARD, fade=fade, layer=2)
-        s.text(a, d, 104, 520, f"UP FIRST · NUMBER {rank}", BARLOW_X, 30, "&H00200A14&", align=4, spacing=4,
-               fade=fade, layer=3)
-        line = f"{artist} · {song}".upper()
-        s.text(a + 0.2, d, 104, 556, line, ARCHIVO, fit(line, ARCHIVO, 32, 820), "&H00200A14&", align=4,
-               fade=fade, layer=3)
-    return s.card("countdown", d, music("lotto_bed.ogg"), background="0x10061c", loop=True, card_kind="countdown")
+        a = until if top else reveal
+        brand.strip(s, a, d, 62, 520, 46, [Part(f"UP FIRST · NO. {rank}", brand.ANTON, 26, brand.INK, brand.YELLOW,
+                                               pad=16),
+                                          Part(brand.clip(f"{artist} · {song}".upper(), brand.ARCHIVO_BLACK, 19, 540),
+                                               brand.ARCHIVO_BLACK, 19, brand.WHITE, brand.INK, pad=16)],
+                    shadow=(5, 5, tint), fade=fade, layer=8)
+    brand.footer(s, d, "Chart data: Last.fm", y=580)
+    return s.card("countdown", d, music("lotto_bed.ogg"), background=brand.INK_BG, loop=True, card_kind="countdown")
 
 
 # --- Teletext ---
@@ -1159,6 +1247,8 @@ def _night_path(solar_lat, solar_lon):
 
 
 def whos_in_space(now, season=None):
+    """The guide's Who's in Space: how many people are off the planet, by station, with the crews on the purple
+    side; then the ISS over a world map with its ground track."""
     crew = fetch_json("astronauts", "https://ll.thespacedevs.com/2.3.0/astronauts/?in_space=true&limit=40"
                       "&mode=normal", max_age_minutes=360, stale_hours=72)
     people = [a for a in (crew or {}).get("results", []) if (a.get("type") or {}).get("name") != "Non-Human"]
@@ -1168,48 +1258,72 @@ def whos_in_space(now, season=None):
     current, track = _iss_positions(now)
     page = 24.0
     d = page * (2 if current else 1)
+    tint = look(season).tint
     s = Script()
-    starfield(s, d, seed=int(now.timestamp()) // 3600 + 7, top=168)
+    _ground(s, d, season)
     pages = [(0, page, "Who's in Space")] + ([(page, d, "Where's the ISS?")] if current else [])
-    info_header(s, d, pages, now, band="&H00301408&", season=season)
+    info_header(s, d, pages, now, season=season)
     fade = (300, 300)
 
     # Page 1: the crews. Chinese astronauts are on Tiangong; everyone else is on the ISS
-    stations = {"INTERNATIONAL SPACE STATION": [], "TIANGONG": []}
+    stations = {"ISS": [], "TIANGONG": []}
     for a in people:
         agency = (a.get("agency") or {}).get("abbrev", "")
-        stations["TIANGONG" if agency == "CNSA" else "INTERNATIONAL SPACE STATION"].append((a["name"], agency))
+        stations["TIANGONG" if agency == "CNSA" else "ISS"].append((a["name"], agency))
     count = len(people)
-    headline = f"{count} {'PERSON IS' if count == 1 else 'PEOPLE ARE'} IN SPACE RIGHT NOW"
-    s.text(0.2, page, 512, 210, headline, ARCHIVO, fit(headline, ARCHIVO, 42, 880), CREAM, shadow=4, fade=fade, layer=3)
+    brand.words(s, 0.2, page, 48, 214, str(count), brand.ANTON, 170, brand.YELLOW, shadow=(9, 9, brand.PURPLE),
+                fade=fade, slide=(200, 600, 90))
+    off = "PERSON OFF THE PLANET" if count == 1 else "PEOPLE OFF THE PLANET"
+    nx = 60 + brand.measure(str(count), brand.ANTON, 170) + 24
+    brand.words(s, 0.4, page, nx, 186, off, brand.ANTON, 40, brand.WHITE, fade=fade)
+    brand.words(s, 0.5, page, nx, 236, "RIGHT NOW", brand.ANTON, 40, brand.WHITE, fade=fade)
+    cx = 66
+    for name, fill, border in (("ISS", tint, None), ("TIANGONG", None, (3, brand.WHITE))):
+        if stations[name]:
+            label = f"{name}: {len(stations[name])}"
+            cx += brand.strip(s, 0.6, page, cx, 300, 38, [Part(label, brand.ARCHIVO_BLACK, 20,
+                                                               brand.INK if fill else brand.WHITE, fill, pad=16,
+                                                               border=border)], fade=fade) + 12
     if starman:
-        s.text(1.5, page, 512, 246, "(plus Starman, still driving his Tesla Roadster around the sun since 2018)",
-               BARLOW_S, 24, SKY, fade=fade, layer=3)
-    # One column per station: name on the left, agency right-aligned at the column's edge
-    columns = [(80, 520, "INTERNATIONAL SPACE STATION", stations["INTERNATIONAL SPACE STATION"]),
-               (600, 944, "TIANGONG", stations["TIANGONG"])]
-    for left, right, title, names in columns:
+        brand.words(s, 1.5, page, 62, 352, "PLUS STARMAN, IN HIS TESLA ROADSTER SINCE 2018",
+                    brand.ARCHIVO, 16, brand.SILVER, bold=True, fade=fade)
+    # The crews: the ISS's down the purple side, Tiangong's under the count
+    for name, x, y, room in (("ISS", 694, 134, 9), ("TIANGONG", 62, 376, 3)):
+        names = stations[name]
         if not names:
             continue
-        s.text(0.4, page, left, 288, title, BARLOW_X, 28, MUSTARD, align=4, spacing=3, fade=fade, layer=3)
-        s.shape(0.4, page, left, 306, rect(right - left, 2), MUSTARD, fade=fade, layer=3)
-        for i, (name, agency) in enumerate(names[:7]):
-            y = 334 + i * 32
-            name = clip_text(name, 26)
-            s.text(0.5 + i * 0.1, page, left, y, name, BARLOW_B, fit(name, BARLOW_B, 30, right - left - 80), WHITE,
-                   align=4, fade=fade, layer=3)
-            s.text(0.5 + i * 0.1, page, right, y + 1, agency, BARLOW_S, 24, SKY, align=6, fade=fade, layer=3)
+        brand.strip(s, 0.5, page, x + 6, y, 34, [Part(name, brand.ANTON, 24, brand.INK, brand.YELLOW, pad=14),
+                                                 Part(f"{len(names)} ABOARD", brand.ARCHIVO_BLACK, 16, brand.WHITE,
+                                                      brand.INK, pad=12)], shadow=(5, 5, brand.INK), fade=fade, layer=6)
+        for i, (person, agency) in enumerate(names[:room]):
+            ry, a = y + 46 + i * 44, 0.6 + i * 0.1
+            brand.slab(s, a, page, x, ry, 272 if x > 600 else 470, 36, brand.INK, shadow=(5, 5, brand.INK), fade=fade,
+                       layer=6)
+            brand.words(s, a, page, x + 18, ry + 18, brand.clip(person.upper(), brand.ARCHIVO_BLACK, 18,
+                                                                (272 if x > 600 else 470) - 110),
+                        brand.ARCHIVO_BLACK, 18, brand.WHITE, fade=fade, layer=8)
+            if agency:
+                aw = brand.measure(agency, brand.ARCHIVO_BLACK, 14) + 14
+                right = x + (272 if x > 600 else 470) - 14
+                brand.shape(s, a, page, right - aw, ry + 7, rect(aw, 22), tint, fade=fade, layer=8)
+                brand.words(s, a, page, right - aw / 2, ry + 18, agency, brand.ARCHIVO_BLACK, 14, brand.INK,
+                            align="center", fade=fade, layer=9)
+        if len(names) > room:
+            brand.words(s, 0.6, page, x + 18, y + 46 + room * 44 + 6, f"AND {len(names) - room} MORE", brand.ARCHIVO_BLACK,
+                        16, brand.SILVER, fade=fade, layer=8)
+    brand.footer(s, page, "Source: The Space Devs")
 
     # Page 2: the ISS over a world map, with the night side shaded and its ground track
     if current:
         a, b = page, d
-        s.shape(a, b, MAP_X, MAP_Y, rect(720, 360), "&H00502810&", fade=fade, layer=2)
+        s.shape(a, b, MAP_X + 10, MAP_Y + 10, rect(720, 360), tint, fade=fade, layer=3)
+        s.shape(a, b, MAP_X, MAP_Y, rect(720, 360), brand.PANEL, fade=fade, layer=4)
         for lon in range(-150, 180, 30):
             x, _ = _map_xy(lon, 0)
-            s.shape(a, b, x, MAP_Y, rect(1, 360), "&H00805838&", fade=fade, layer=3)
+            s.shape(a, b, x, MAP_Y, rect(1, 360), brand.DEEP_PURPLE, fade=fade, layer=5)
         for lat in (-60, -30, 0, 30, 60):
             _, y = _map_xy(0, lat)
-            s.shape(a, b, MAP_X, y, rect(720, 1), "&H00805838&", fade=fade, layer=3)
+            s.shape(a, b, MAP_X, y, rect(720, 1), brand.DEEP_PURPLE, fade=fade, layer=5)
         try:
             with open(WORLD_MAP) as f:
                 rings = json.load(f)
@@ -1217,11 +1331,11 @@ def whos_in_space(now, season=None):
             for ring in rings:
                 pts = [_map_xy(ring[i], ring[i + 1]) for i in range(0, len(ring), 2)]
                 land.append("m " + " l ".join(f"{x:.0f} {y:.0f}" for x, y in pts))
-            s.shape(a, b, 0, 0, " ".join(land), "&H0050A048&", fade=fade, layer=4)
+            s.shape(a, b, 0, 0, " ".join(land), brand.PURPLE, fade=fade, layer=6)
         except (OSError, ValueError) as e:
             logger.warning(f"World map unavailable: {e}")
         s.shape(a, b, 0, 0, _night_path(current["solar_lat"], current["solar_lon"]), "&H00000000&", fade=fade,
-                layer=5, extra="\\1a&H70&")
+                layer=7, extra="\\1a&H70&")
         for p, q in zip(track, track[1:]):
             if abs(p["longitude"] - q["longitude"]) > 180:
                 continue  # crosses the date line
@@ -1233,19 +1347,132 @@ def whos_in_space(now, season=None):
             ox, oy = -dy / length * 1.5, dx / length * 1.5
             path = (f"m {x1 + ox:.1f} {y1 + oy:.1f} l {x2 + ox:.1f} {y2 + oy:.1f} "
                     f"l {x2 - ox:.1f} {y2 - oy:.1f} l {x1 - ox:.1f} {y1 - oy:.1f}")
-            s.shape(a, b, 0, 0, path, YELLOW if future else SKY, fade=fade, layer=6,
+            s.shape(a, b, 0, 0, path, brand.YELLOW if future else WHITE, fade=fade, layer=8,
                     extra="" if future else "\\1a&H60&")
         x, y = _map_xy(current["longitude"], current["latitude"])
         pulse = "".join(f"\\t({t},{t + 600},\\fscx180\\fscy180\\1a&HFF&)\\t({t + 600},{t + 601},\\fscx100\\fscy100\\1a&H40&)"
                         for t in range(0, int(page * 1000), 1200))
-        s.shape(a, b, x, y, circle(9), WHITE, fade=fade, layer=7, align=5, extra="\\1a&H40&" + pulse)
-        s.shape(a, b, x - 6, y - 6, circle(6), WHITE, fade=fade, layer=8)
-        lx = x + 14 if x < MAP_X + 640 else x - 14
-        s.text(a, b, lx, y - 16, "ISS", BARLOW_X, 28, WHITE, align=4 if x < MAP_X + 640 else 6, shadow=2,
-               shadow_color=BLACK, fade=fade, layer=8)
+        s.shape(a, b, x, y, circle(9), WHITE, fade=fade, layer=9, align=5, extra="\\1a&H40&" + pulse)
+        s.shape(a, b, x - 6, y - 6, circle(6), WHITE, fade=fade, layer=10)
+        east = x < MAP_X + 640
+        brand.strip(s, a, b, x + 16 if east else x - 16 - 60, y - 34, 28, [Part("ISS", brand.ANTON, 20, brand.INK,
+                                                                                brand.YELLOW, pad=12)],
+                    fade=fade, layer=10)
         lat, lon = current["latitude"], current["longitude"]
         caption = (f"{abs(lat):.1f}°{'N' if lat >= 0 else 'S'}  {abs(lon):.1f}°{'E' if lon >= 0 else 'W'}"
-                   f"   ·   {current['velocity']:,.0f} MPH   ·   {current['altitude']:,.0f} MILES UP")
-        s.shape(a, b, MAP_X, MAP_Y + 360 - 40, rect(720, 40), "&H00000000&", fade=fade, layer=8, extra="\\1a&H50&")
-        s.text(a, b, 512, MAP_Y + 360 - 20, caption, BARLOW_B, 28, WHITE, fade=fade, layer=9)
-    return s.card("space", d, music("space_bed.ogg"), background=SPACE_BACKGROUND, loop=True, card_kind="space")
+                   f"  ·  {current['velocity']:,.0f} MPH  ·  {current['altitude']:,.0f} MILES UP")
+        cw = brand.measure(caption, brand.ARCHIVO_BLACK, 19) + 36
+        brand.strip(s, a, b, W / 2 - cw / 2, MAP_Y + 360 - 22, 38, [Part(caption, brand.ARCHIVO_BLACK, 19, brand.INK,
+                                                                       brand.WHITE, pad=18)],
+                    shadow=(5, 5, brand.INK), fade=fade, layer=11)
+    return s.card("space", d, music("space_bed.ogg"), background=brand.INK_BG, loop=True, card_kind="space")
+
+
+# --- This Day in Gaming, Born Today, #1 This Week (their data: retrotv/onthisday.py, gathered by the writing job) ---
+
+def on_this_day(day):
+    """The writing job's picks for a broadcast day: {"games", "born", "number_ones", "featured_year"}, or {}."""
+    try:
+        with open(ONTHISDAY_FILE) as f:
+            return json.load(f).get("days", {}).get(day.isoformat(), {}) or {}
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def games_today(now, day, season, cached):
+    """This Day in Gaming: games released on this date, best known first, every one of them with a TV ad in the
+    library. The first whose ad is on the SD card (cached(src)) leads, and its ad follows the card (Card.follow)."""
+    games = on_this_day(day).get("games") or []
+    if not games:
+        return None
+    lead = ad = None
+    for game in games:
+        ad = next((src for src in game.get("ads", []) if cached(src)), None)
+        if ad:
+            lead = game
+            break
+    shown = ([lead] if lead else []) + [g for g in games if g is not lead]
+    d = 16.0
+    tint = look(season).tint
+    s = Script()
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, "This Day in Gaming")], now, season=season)
+    _rows(s, d, [(str(g["year"]), g["title"], g.get("platform"), None) for g in shown[:4]], tint)
+    if lead:
+        _next_strip(s, d, f"The TV ad for {lead['title']}", tint)
+    card = s.card("games", d, music("quiz_bed.ogg"), loop=True, card_kind="games", background=brand.INK_BG)
+    card.follow = ad
+    return card
+
+
+def born_today(now, day, season, tonight=()):
+    """Born Today: people from the library's shows born on this date: who they played, and how old they turn (or
+    their years). tonight: [(start, show name)] still to air today, so a birthday's show on tonight says when."""
+    people = (on_this_day(day).get("born") or [])[:4]
+    if not people:
+        return None
+    rows = []
+    for p in people:
+        born = int(p["born"][:4])
+        # The role whose show is on later tonight, if one is, else their first
+        on = next(((t, role) for t, name in tonight for role in p["roles"] if _same_show(name, role[1])), None)
+        character, show = on[1] if on else p["roles"][0]
+        sub = f"{character} on {show}" if character else show
+        if on:
+            sub += f" · tonight at {clock(on[0])}"
+        right = f"{born}–{p['died'][:4]}" if p.get("died") else f"TURNS {now.year - born}"
+        rows.append((None, p["name"], sub, right))
+    d = 16.0
+    tint = look(season).tint
+    s = Script()
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, "Born Today")], now, season=season)
+    _rows(s, d, rows, tint)
+    return s.card("born", d, music("history_bed.ogg"), loop=True, card_kind="born", background=brand.INK_BG)
+
+
+def _same_show(a, b):
+    plain = lambda t: re.sub(r"^the\s+", "", re.sub(r"[^a-z0-9 ]+", "", re.sub(r"\([^)]*\)", " ", (t or "").lower()))).strip()
+    return plain(a) == plain(b)
+
+
+def number_one(now, day, season, year, cached):
+    """#1 This Week: the Hot 100's number one in this week of a past year. The writing job's featured year when its
+    video is on the SD card, else any year whose video is (the video follows the card); else the year nearest `year`
+    (the show's era) without one. Laid out like the guide's Weekly Countdown number one, the year big on the
+    purple side."""
+    picks = on_this_day(day)
+    numbers = picks.get("number_ones") or []
+    if not numbers:
+        return None
+    ready = [n for n in numbers if n.get("video") and cached(n["video"])]
+    lead = next((n for n in ready if n["year"] == picks.get("featured_year")), ready[0] if ready else None)
+    chosen = lead or min(numbers, key=lambda n: (abs(n["year"] - (year or 1990)), n["year"]))
+    d = 12.0
+    tint = look(season).tint
+    s = Script()
+    _ground(s, d, season)
+    info_header(s, d, [(0, d, "#1 This Week")], now, season=season)
+    fade = (300, 300)
+    issue = datetime.date.fromisoformat(chosen["issue"])
+    brand.strip(s, 0.2, d, 62, 134, 36, [Part("BILLBOARD HOT 100", brand.ANTON, 24, brand.INK, brand.YELLOW, pad=14),
+                                        Part(f"WEEK OF {issue:%b %-d, %Y}".upper(), brand.ARCHIVO_BLACK, 17, brand.WHITE,
+                                             brand.INK, pad=14)], fade=fade)
+    brand.words(s, 0.3, d, 48, 300, "1", brand.ANTON, 200, brand.YELLOW, shadow=(9, 9, brand.PURPLE), fade=fade,
+                extra="\\t(0,250,\\fscx115\\fscy115)\\t(250,450,\\fscx100\\fscy100)")
+    lines, em = cards.wrapped(f"“{chosen['song']}”".upper(), brand.ANTON, 52, 400)
+    for i, line in enumerate(lines):
+        brand.words(s, 0.5, d, 166, 252 + i * em, line, brand.ANTON, em, brand.WHITE, fade=fade)
+    y = 252 + (len(lines) - 1) * em + em / 2 + 28
+    brand.words(s, 0.7, d, 168, y, brand.clip(chosen["artist"].upper(), brand.ARCHIVO_BLACK, 24, 400),
+                brand.ARCHIVO_BLACK, 24, brand.YELLOW, fade=fade)
+    if chosen.get("weeks", 1) > 1:
+        brand.strip(s, 1.0, d, 172, y + 34, 36, [Part(f"{chosen['weeks']} WEEKS AT NO. 1", brand.ARCHIVO_BLACK, 19,
+                                                      brand.WHITE, pad=16, border=(3, brand.WHITE))], fade=fade)
+    brand.words(s, 0.4, d, 830, 330, str(chosen["year"]), brand.ANTON, 120, brand.WHITE, align="center",
+                shadow=(8, 8, brand.INK), fade=fade, layer=6)
+    if lead:
+        _next_strip(s, d, "The video", tint)
+    card = s.card("number_one", d, music("guide_bed.ogg"), loop=True, card_kind="number_one", background=brand.INK_BG)
+    card.follow = lead["video"] if lead else None
+    return card

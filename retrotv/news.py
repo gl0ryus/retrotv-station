@@ -32,7 +32,7 @@ import xml.etree.ElementTree as ET
 
 import anthropic
 
-from retrotv import health
+from retrotv import health, onthisday
 from retrotv.jsonio import get_json, write_json
 
 from retrotv.blurbs import (LEVELS, MAX_CHARS, MIX, NEWS_FILE, NEWS_MAX_AGE_HOURS, NOT_CLEAN, SHOW_RIFFS_FILE,
@@ -647,11 +647,16 @@ def sky_tonight():
                 f"planets {[p['name'] for p in planets]}, {len(passes)} visible ISS passes in 3 days")
 
 
+def on_this_day():
+    """This Day in Gaming, Born Today and #1 This Week: a little more of their data, and the day's picks."""
+    onthisday.gather(_broadcast_day())
+
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
     health.install("news")
     failed = []
-    for step in (quip_headlines, riff_shows, sky_tonight, pick_anniversaries, draw_art, popup_facts):
+    for step in (quip_headlines, riff_shows, sky_tonight, pick_anniversaries, draw_art, popup_facts, on_this_day):
         try:
             step()
         except Exception as e:   # one step failing doesn't keep the other from running

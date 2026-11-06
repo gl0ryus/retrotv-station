@@ -79,10 +79,24 @@ MPV_SOCKET = "/tmp/retrotv-mpv.sock"
 # 1024x600, so each scanline is 3 panel pixels. Then composite-style colour fringing, saturation, grain and a vignette,
 # all at low res so they stay cheap. Video faster than about 33 fps first drops every other frame: nobody sees it at this
 # size, and the CRT shader can't keep up at 60 anyway (it dropped 143 frames in 30 s of a 60 fps show; this, 1).
+CRT = cards.CRT   # the switch is in retrotv.cards, which draws for it
+# The tube itself (mpv.conf's shader: the curve, the mask, the glow) and the CRT's colour, grain and vignette. Off
+# leaves a plain sharp picture; with the 342x200 squeeze it is always on
+CRT_SHADER = True
+# At full size the shader is mpv.conf's made softer (lighter mask, softer pixels and scanlines): the original's, 1:1
+# with the panel's pixels, beats against them into bands. The file is on the Pi only, like mpv.conf's
+HD_SHADER = "~~/shaders/crt-lottes-hd.glsl"
+FRAME_W, FRAME_H = (342, 200) if CRT else (1024, 600)   # the picture where a file's overlays join it
 CRUNCH_VF = ("lavfi=[select='isnan(prev_selected_t)+gte(t-prev_selected_t,0.03)',"
              "scale=w='if(gt(dar,342/200),trunc(200*dar/2)*2,342)':h='if(gt(dar,342/200),200,trunc(342/dar/2)*2)':flags=area,"
              "setsar=1,crop=342:200,setsar=sar=512/513:max=1000,eq=saturation=1.3:contrast=1.08,chromashift=cbh=-1:crh=1,"
-             "noise=alls=12:allf=t+u,vignette=angle=PI/5]")
+             "noise=alls=12:allf=t+u,vignette=angle=PI/5]") if CRT else (
+    # Without the squeeze: the same cover-and-crop at the panel's own size, with the CRT's treatment if the shader's on
+    "lavfi=[select='isnan(prev_selected_t)+gte(t-prev_selected_t,0.03)',"
+    "scale=w='if(gt(dar,1024/600),trunc(600*dar/2)*2,1024)':h='if(gt(dar,1024/600),600,trunc(1024/dar/2)*2)':flags=bicubic,"
+    "setsar=1,crop=1024:600"
+    + (",eq=saturation=1.3:contrast=1.08,chromashift=cbh=-2:crh=2,vignette=angle=PI/5" if CRT_SHADER else "")
+    + "]")   # no grain: at full size it took most of a CPU core
 # Tuned on 2026-11-03 by playing the same files each way on the Pi: a quarter less CPU and memory for mpv.
 # - read ahead 16 MiB, keep nothing behind: every act loads afresh, so nothing ever seeks back into it (was 64 MiB
 #   ahead and 50 behind). Refill copies are also paced while on the air (COPY_MB_PER_SEC_ON_AIR)
@@ -93,6 +107,9 @@ PLAYER_CMD = ["/usr/bin/mpv", "--profile=retrotv", "--really-quiet", "--idle=yes
               "--cache=yes", "--demuxer-max-bytes=16MiB", "--demuxer-max-back-bytes=0",
               "--scale=bilinear", "--cscale=bilinear", "--dscale=bilinear", "--vd-lavc-skiploopfilter=all",
               f"--vf={CRUNCH_VF}", f"--input-ipc-server={MPV_SOCKET}"]
+if not CRT:   # the deblocking back on, since it shows at full size; and the shader off if asked
+    PLAYER_CMD = ([a for a in PLAYER_CMD if a != "--vd-lavc-skiploopfilter=all"]
+                  + [f"--glsl-shaders={HD_SHADER}" if CRT_SHADER else "--glsl-shaders="])
 # glibc gives each of mpv's threads its own memory pool and keeps what they free: two pools at most cut how fast mpv's
 # memory grows from 20 to 4.5 MB a minute, with short items back to back
 PLAYER_ENV = {"MALLOC_ARENA_MAX": "2"}
@@ -105,9 +122,10 @@ SHOW_TITLE_SECONDS = 0     # show a show's name on screen as it starts (0 = off;
 BUMPER_FILE = os.path.join(HOME_DIR, "retrotv_bumper.mp4")    # plays before every show (None = off)
 STATIC_FILE = os.path.join(ASSETS_DIR, "static.mp4")          # a burst of snow between items (None = off)
 STATIC_SECONDS = 0.4
-LOGO_BUG_FILE = os.path.join(ASSETS_DIR, "logo_bug.png")      # corner logo during shows (None = off)
+LOGO_BUG_FILE = os.path.join(ASSETS_DIR, "gtv_bug.png" if CRT else "gtv_bug_1024.png")   # the corner badge during
+                                                              # shows, from tests/make_bug.py (None = off)
 PROGRESS_BAR = True        # a faint line along the bottom showing how far into the show or commercial we are
-PROGRESS_COLOR = "white@0.35"
+PROGRESS_COLOR = "white@0.2"
 OFF_AIR_FILE = os.path.join(ASSETS_DIR, "off_air_loop.mp4")   # loops between sign-off and sign-on
 OFF_AIR_SECONDS = 60.0
 
@@ -115,7 +133,8 @@ OFF_AIR_SECONDS = 60.0
 # at SIGN_ON_HOUR: the set warms up, a minute of colour bars, a "good morning" ID, then the first show
 SIGN_OFF_HOUR = 2
 SIGN_ON_HOUR = 9
-LINEUP_HOURS = 3           # shows are scheduled this far ahead, for the guide and the "Up Next" cards
+LINEUP_HOURS = 3           # shows are scheduled at least this far ahead, and always to the end of the broadcast day
+LINEUP_FILE = os.path.join(HOME_DIR, "retrotv_lineup.json")   # the day's plan, so a restart picks it back up
 ANTHEM = True              # the national anthem before "This concludes our broadcast day"
 OFF_AIR_LOOP_MINUTES = 30  # the off-air slate runs this long, then the set "turns off" until morning (None = all night)
 
@@ -169,7 +188,11 @@ SPECIALS = {
     "teletext": 150, # G|TV Text: teletext pages of tonight's listings, the weather, markets and odd news
     "art": 240,      # Art Break: the day's picture, drawn by Claude, building up shape by shape
     "marathon": 120, # an ad for the next marathon, its picture scrolling behind the day and start time
+    "games": 180,    # This Day in Gaming: games out on this date, then one's TV ad (retrotv/onthisday.py)
+    "born": 240,     # Born Today: people from the library's shows born on this date, from TVmaze
+    "number_one": 180,  # #1 This Week: Billboard's number one this week in a past year, then its video (between shows)
 }
+BETWEEN_SHOWS_ONLY = ("guide", "number_one")   # a music video could run a mid-show break long
 # How far the text bumps go: clean until BLURB_CHEEKY_HOUR, cheeky until BLURB_RAUNCHY_HOUR, raunchy to sign-off
 # (crude, never hateful). Always clean in the kids' dayparts
 BLURB_CHEEKY_HOUR = 21
@@ -296,6 +319,8 @@ NEW_YEAR_COUNTDOWN = True  # a countdown into midnight on New Year's Eve
 # they left off. SERIES_CACHED_AHEAD is the most unplayed episodes of one series kept on the SD card
 SERIES_FILE = os.path.join(HOME_DIR, "retrotv_series.json")
 RERUN_HOURS = 12           # nothing airs again within this long (holiday episodes included)
+REPEAT_DAYS = 30           # nor an episode or movie within this long, while there's something else to air: shuffled
+                           # groups and the filler wait it out (schedule rotations go in order, and start over later)
 # When each show and music video last aired, kept even after its copy leaves the SD card (the manifest forgets
 # it then), so the refill doesn't copy back what just aired: nothing aired within REFETCH_DAYS is fetched again,
 # unless everything a pick could use has been (then what aired longest ago goes first), and never anything aired
@@ -344,7 +369,7 @@ STRETCH = True
 STRETCH_STRIPS = 16
 STRETCH_POWER = 2
 STRETCH_MAX = 1.45
-STAGE_W, STAGE_H = 512, 300   # mpv.conf's square-pixel 300-line stage (the cards render at this size too)
+STAGE_W, STAGE_H = (512, 300) if CRT else (1024, 600)   # the square-pixel stage the stretch draws on (cards.RENDER)
 SNIPE_SECONDS = 30         # a "NEXT: ..." lower third for the last seconds of a show (0 = off)
 PROMO_AT = 8.0             # seconds into a show for the NEXT / LATER / TONIGHT lower third (0 = off)
 PROMO_PANEL_SECONDS = 8.0   # long enough to take in the clip that goes with each
@@ -356,23 +381,36 @@ ANNIVERSARY_HOUR = 20
 # Phone remote and live guide on the home Wi-Fi: http://retrotv.local/
 REMOTE_PORT = 80
 REMOTE_STATE_FILE = os.path.join(HOME_DIR, "retrotv_remote.json")
+# The play log page, http://retrotv.local/log: everything that started playing, one JSON line each (retrotv/playlog.py)
+PLAY_LOG_FILE = os.path.join(HOME_DIR, "retrotv_plays.jsonl")
+PLAY_LOG_DAYS = 14
 
 # The watch page, http://retrotv.local/watch: the station as its own screen shows it, CRT look and all, with its
-# sound, in a browser on the home network (retrotv/live.py). It's only made while someone watches.
+# sound, in a browser on the home network. MediaMTX streams it (retrotv/live.py); the picture and sound are only
+# captured while someone watches (retrotv/capture.py).
 LIVE_STREAM = True
 LIVE_CAPTURE_FFMPEG = "/usr/local/lib/retrotv/ffmpeg"   # the copy of ffmpeg that may read the screen (README)
 LIVE_DRM_DEVICE = "/dev/dri/by-path/platform-gpu-card"   # the panel's display (mpv.conf's drm-device)
 # The player's sound goes to the panel through ALSA's tee, which pipes a copy to retrotv/audio_tap.py (run from
 # AUDIO_TAP_FILE, on the SD card), which sends it to this UDP port on the Pi. Always 16-bit stereo at LIVE_AUDIO_RATE
 LIVE_AUDIO_DEVICE = "hdmi:CARD=vc4hdmi1,DEV=0"           # the panel's speakers (mpv.conf's audio-device)
+LIVE_ALSA_STATUS = "/proc/asound/vc4hdmi1/pcm0p/sub0/status"   # how much sound those speakers have queued
 LIVE_AUDIO_PORT = 5004
 LIVE_AUDIO_RATE = 48000
 AUDIO_TAP_FILE = os.path.join(HOME_DIR, ".cache", "retrotv", "audio_tap.py")
-LIVE_AUDIO_SHIFT_MS = -60  # moves the stream's sound against its picture: a flash-and-beep clip had it 60 ms late
-                           # (2026-11-03), so it's brought forward
+LIVE_AUDIO_SHIFT_MS = -150   # moves the stream's sound against its picture (later when positive): a flash-and-beep
+                             # clip through the watch page's HLS had the sound 152 ms late, steady (2026-11-05: the
+                             # AAC encoder's ~21 ms and the screen grab's own delay)
 LIVE_VIDEO_KBPS = 4000
-LIVE_IDLE_SECONDS = 20     # keep streaming this long after the last viewer leaves, so a reload rejoins at once
-LIVE_MAX_VIEWERS = 4
+# MediaMTX v1.21.3 (github.com/bluenviron/mediamtx, linux arm64, checked against the release's checksums), fetched by
+# hand (README). It serves the stream to browsers as HLS on MEDIAMTX_HLS_PORT; its RTSP, where the capture
+# publishes, and its API stay on this machine
+MEDIAMTX_FILE = os.path.join(HOME_DIR, "retrotv_assets", "mediamtx")
+MEDIAMTX_CONFIG_FILE = os.path.join(HOME_DIR, ".cache", "retrotv", "mediamtx.yml")
+MEDIAMTX_API_PORT = 9997
+MEDIAMTX_RTSP_PORT = 8554
+MEDIAMTX_HLS_PORT = 8888
+CAPTURE_PID_FILE = "/tmp/retrotv-capture.pid"   # the capture running for MediaMTX, so the player can stop it
 
 # The remote's TV guide: the main channel on top, then make-believe channels filled from the cached shows.
 # Picking a show on one plays it right away ("changing the channel"); when it ends the set goes back to the

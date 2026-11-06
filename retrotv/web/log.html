@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>G|TV Play Log</title>
+<link rel="stylesheet" href="/common.css">
+<style>
+/* What aired, newest first (served by retrotv/remote.py from retrotv/playlog.py's /api/plays). A show's parts make
+   one row; one that aired more than once in the time shown is marked, with when else it aired. */
+:root { --repeat: #f2b33d; }
+body { margin: 0; background: var(--bg); color: var(--cream); font: 600 19px/1.3 "Barlow Condensed", sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 16px 16px 48px; }
+header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.logo { font-family: "Archivo Black"; font-size: 30px; transform: skewX(-9deg); line-height: 1; }
+nav a { color: var(--sky); margin-left: 14px; }
+nav a:first-child { margin-left: 0; }
+h1 { margin: 16px 0 2px; font-family: "Archivo Black"; font-size: 25px; line-height: 1.15; font-weight: 400; }
+#summary { color: var(--sky); font-size: 16px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 14px 0 4px; font-size: 17px; }
+.controls label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+select { font: 600 17px "Barlow Condensed", sans-serif; color: var(--cream); background: var(--panel); border: 1px solid var(--edge);
+         border-radius: 6px; padding: 4px 8px; }
+input[type=checkbox] { accent-color: var(--mustard); width: 18px; height: 18px; }
+h2 { margin: 26px 0 6px; font-size: 16px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--sky); }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.row { display: grid; grid-template-columns: 76px 1fr; gap: 10px; padding: 9px 12px; border-top: 1px solid var(--line); }
+.row:first-child { border-top: 0; }
+.time { color: var(--sky); font-size: 17px; }
+.name { overflow-wrap: anywhere; }
+.sub { color: var(--sky); font-size: 16px; overflow-wrap: anywhere; }
+.tag { font-size: 14px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--sky); margin-right: 6px; }
+.minor .name { color: var(--sky); font-weight: 600; }
+.repeat .sub.again { color: var(--repeat); }
+.empty { padding: 12px; color: var(--sky); }
+@media (max-width: 480px) { .row { grid-template-columns: 64px 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo">G|TV</div>
+    <nav><a href="/">Guide</a><a href="/schedule">Scheduler</a><a href="/health">Health</a><a href="/watch">Watch</a></nav>
+  </header>
+  <h1>Play log</h1>
+  <div id="summary">Loading&hellip;</div>
+  <div class="controls">
+    <select id="hours" aria-label="How far back">
+      <option value="24">Last 24 hours</option>
+      <option value="72" selected>Last 3 days</option>
+      <option value="168">Last 7 days</option>
+      <option value="336">Last 14 days</option>
+    </select>
+    <label><input type="checkbox" id="repeats"> Repeats only</label>
+    <label><input type="checkbox" id="ads"> Commercials</label>
+    <label><input type="checkbox" id="station"> Station breaks</label>
+  </div>
+  <div id="days"></div>
+</main>
+<script>
+// A show's parts, a make-believe channel's show, a live launch (the Launch Watch card is kind "launch" too, but "[launch]")
+const isShow = p => p.kind === "act" || p.kind === "detour" || (p.kind === "launch" && p.label.startsWith("LIVE: "));
+const days = document.getElementById("days"), summary = document.getElementById("summary");
+const controls = ["hours", "repeats", "ads", "station"].map(id => document.getElementById(id));
+let plays = [];
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+const clock = t => new Date(t * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const when = t => new Date(t * 1000).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" });
+// The broadcast day: the station signs off overnight, so after-midnight shows belong to the evening before
+const dayOf = t => new Date((t - 5 * 3600) * 1000).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+
+// The same part again this soon is the show picked up where it was (after an alert, a test or a channel change cut in)
+const RESUME_SECONDS = 3600;
+
+function rows() {
+  // A show's parts become one airing: a later part, or the same part picked up again, joins the airing it belongs
+  // to; a part 1 (or a part that doesn't follow on) starts a new one. A show without breaks is one part of one
+  const airings = [], latest = new Map();
+  for (const p of plays) {
+    if (!isShow(p)) {
+      airings.push({ t: p.t, kind: p.kind, name: p.label, show: false });
+      continue;
+    }
+    const m = p.label.match(/^(.*) \(act (\d+)\/(\d+)\)$/);
+    const name = m ? m[1] : p.label, part = m ? +m[2] : 1, of = m ? +m[3] : 1, open = latest.get(name);
+    const at = open && open.parts[open.parts.length - 1];
+    if (open && ((part > at && part > 1) || (part === at && p.t - open.last < RESUME_SECONDS))) {
+      if (part > at) open.parts.push(part);
+      open.last = p.t;
+      continue;
+    }
+    const airing = { t: p.t, last: p.t, kind: p.kind, name, parts: [part], of, show: true };
+    latest.set(name, airing);
+    airings.push(airing);
+  }
+  const seen = new Map();   // name -> when each of its airings started
+  for (const a of airings) if (a.show) seen.set(a.name, [...(seen.get(a.name) || []), a.t]);
+  for (const a of airings) if (a.show) a.others = seen.get(a.name).filter(t => t !== a.t);
+  return airings;
+}
+
+function render() {
+  const [, repeatsOnly, ads, station] = controls.map(c => c.checked);
+  const all = rows();
+  const shown = all.filter(a => a.show ? (!repeatsOnly || a.others.length) : !repeatsOnly && (a.kind === "commercial" ? ads : station));
+  const showCount = all.filter(a => a.show).length;
+  const repeated = new Set(all.filter(a => a.show && a.others.length).map(a => a.name)).size;
+  summary.textContent = `${showCount} shows aired, ${repeated} of them more than once` +
+    `; ${all.filter(a => a.kind === "commercial").length} commercials`;
+  days.replaceChildren();
+  if (!shown.length) { days.append(el("div", "empty", repeatsOnly ? "No repeats in this time." : "Nothing has played in this time.")); return; }
+  let day = null, card = null;
+  for (const a of shown.slice().reverse()) {
+    if (dayOf(a.t) !== day) {
+      day = dayOf(a.t);
+      days.append(el("h2", "", day));
+      card = days.appendChild(el("div", "card"));
+    }
+    const row = el("div", "row" + (a.show ? "" : " minor") + (a.show && a.others.length ? " repeat" : ""));
+    row.append(el("div", "time", clock(a.t)));
+    const text = el("div");
+    const name = el("div", "name");
+    if (a.kind === "detour") name.append(el("span", "tag", "Channel"));
+    if (a.kind === "launch") name.append(el("span", "tag", "Live"));
+    if (a.kind === "commercial") name.append(el("span", "tag", "Ad"));
+    if (!a.show && a.kind !== "commercial") name.append(el("span", "tag", "Station"));
+    name.append(a.show ? a.name : a.name.replace(/^\[(.*)\]$/, "$1"));
+    text.append(name);
+    if (a.parts && a.of > 1) {
+      const first = a.parts[0], last = a.parts[a.parts.length - 1];
+      text.append(el("div", "sub", first === last ? `Part ${first} of ${a.of}` : `Parts ${first}–${last} of ${a.of}`));
+    }
+    if (a.show && a.others.length) {
+      text.append(el("div", "sub again", "Repeat · also aired " + a.others.slice(-3).map(when).join(", ")));
+    }
+    row.append(text);
+    card.append(row);
+  }
+}
+
+async function load() {
+  try {
+    const r = await fetch("/api/plays?hours=" + controls[0].value, { cache: "no-store" });
+    plays = await r.json();
+    render();
+  } catch (e) {
+    summary.textContent = "Couldn't load the play log.";
+  }
+}
+
+controls[0].addEventListener("change", load);
+controls.slice(1).forEach(c => c.addEventListener("change", render));
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

@@ -27,10 +27,10 @@ from retrotv.config import (
     COPY_MB_PER_SEC_ON_AIR, FULL_AFTER_MISSES, GB, HOLIDAY_COMMERCIALS_CACHED, HOLIDAY_WEIGHT, HOME_DIR, INDEX_FILE,
     INDEX_MAX_AGE_DAYS, LOW_WATER_HOURS, MAIN_CATEGORIES, MANIFEST_FILE, MAX_SET_ASIDE_AN_HOUR, MEDIA_ROOT,
     MIN_FREE_GB, MIX_FOLDERS, MUSIC_MIN_CACHED, MUSIC_POOL_GB, MUSIC_VIDEO_SECONDS, NAS_INDEX_FILE, PATHS,
-    POOL_CHOICES, REFETCH_DAYS, REFILL_BELOW_HOURS, REFILL_HOUR, REFILL_NOW_FILE, REFILL_RETRY_MINUTES, RERUN_HOURS,
-    REVIEW_DIRS, SCHEDULE_FILL_DAYS, SEASON_RERUN_DAYS, SERIES_FILE, SHORT_SHOW_MINUTES, SIGN_ON_HOUR, SLOT_MINUTES,
-    STAGE_H, STAGE_W, STRETCH_MAX, STRETCH_POWER, STRETCH_STRIPS, TAPE_WEIGHT, TURNS_FILE, USB_DIR, USB_SHOWS_DIR,
-    USB_SHOWS_GB, USB_WAIT_SECONDS, VIDEO_EXTENSIONS, logger, td)
+    POOL_CHOICES, REFETCH_DAYS, REFILL_BELOW_HOURS, REFILL_HOUR, REFILL_NOW_FILE, REFILL_RETRY_MINUTES, REPEAT_DAYS,
+    RERUN_HOURS, REVIEW_DIRS, SCHEDULE_FILL_DAYS, SEASON_RERUN_DAYS, SERIES_FILE, SHORT_SHOW_MINUTES, SIGN_ON_HOUR,
+    SLOT_MINUTES, STAGE_H, STAGE_W, STRETCH_MAX, STRETCH_POWER, STRETCH_STRIPS, TAPE_WEIGHT, TURNS_FILE, USB_DIR,
+    USB_SHOWS_DIR, USB_SHOWS_GB, USB_WAIT_SECONDS, VIDEO_EXTENSIONS, logger, td)
 from retrotv.rules import (
     allowed, broadcast_date, broadcast_hour, cache_path, holiday_ahead, holiday_season, holiday_tag, is_tape,
     marathon_series, off_air, pool_of, rating, slot_end)
@@ -397,13 +397,15 @@ class CacheManager:
             return e["category"] == "videos" and rating(src) == "kids"
         return e["category"] in MIX_FOLDERS.get(category, (category,))
 
-    def show_candidates(self, category, when, exclude=(), series=None):
+    def show_candidates(self, category, when, exclude=(), series=None, rerun=False):
         """
         Cached shows that may air at `when`: for each series the next episode in order, plus
         anything that isn't part of a series, plus the season's holiday shows (out of order).
         Each series counts once however many of its episodes are cached, as much as a show outside a
         series, and its holiday episodes share one HOLIDAY_WEIGHT. Tapes split one TAPE_WEIGHT between
-        them, archive.org's downloads ARCHIVE_SHARE of the odds. Returns [(src, entry, weight, in_order)].
+        them, archive.org's downloads ARCHIVE_SHARE of the odds. Nothing that aired in the last REPEAT_DAYS
+        (a series offers its next episode that hasn't), or with rerun, the last RERUN_HOURS.
+        Returns [(src, entry, weight, in_order)].
         """
         hour = broadcast_hour(when)[1]
         season = holiday_season(when.date())
@@ -417,11 +419,11 @@ class CacheManager:
                 if e and e.get("series") and e.get("order"):
                     if positions.get(e["series"]) is None or e["order"] > positions[e["series"]]:
                         positions[e["series"]] = e["order"]
-            recently = time.time() - RERUN_HOURS * 3600
+            recently = time.time() - (RERUN_HOURS * 3600 if rerun else REPEAT_DAYS * 86400)
             for src, e in self.entries.items():
                 if (src in exclude or src in self.reserved or not self._matches(src, e, category)
                         or (series and e.get("series") != series) or not allowed(src, hour)
-                        or e["last_played"] > recently):
+                        or self._last_aired(src, e) > recently):
                     continue
                 tag = holiday_tag(src)
                 if tag and tag != season:
@@ -513,6 +515,26 @@ class CacheManager:
                 self.entries[src]["breaks"] = breaks
         self._save_manifest()
 
+    def _last_aired(self, src, e):
+        """When a show last went on the air: by AIRED_FILE (which outlives its copy) or its copy's own last play."""
+        return max(self.aired.get(src, 0), e["last_played"])
+
+    def _save_aired(self, src, when):
+        """Caller holds the lock. Notes when src aired, in AIRED_FILE."""
+        self.aired[src] = when
+        keep = time.time() - AIRED_KEEP_DAYS * 86400
+        self.aired = {s: t for s, t in self.aired.items() if t > keep}
+        try:
+            write_json(AIRED_FILE, self.aired)
+        except OSError as err:
+            logger.error(f"Could not save what aired: {err}")
+
+    def note_aired(self, src):
+        """A show has gone on the air: it counts as aired from now, not only once it's over (mark_played), so a
+        restart partway through can't put it straight back on. Its plays and its series' place wait for the end."""
+        with self.lock:
+            self._save_aired(src, time.time())
+
     def mark_played(self, src, in_order=False):
         with self.lock:
             self.reserved.discard(src)
@@ -521,13 +543,7 @@ class CacheManager:
                 e["plays"] += 1
                 e["last_played"] = time.time()
                 if e["category"] != "commercials":
-                    self.aired[src] = e["last_played"]
-                    keep = time.time() - AIRED_KEEP_DAYS * 86400
-                    self.aired = {s: t for s, t in self.aired.items() if t > keep}
-                    try:
-                        write_json(AIRED_FILE, self.aired)
-                    except OSError as err:
-                        logger.error(f"Could not save what aired: {err}")
+                    self._save_aired(src, e["last_played"])
                 if in_order and e.get("series") and e.get("order"):
                     self.series_pos[e["series"]] = e["order"]
                     try:
@@ -695,15 +711,19 @@ class CacheManager:
         return sorted(files, key=lambda s: (aired.get(s, 0), hashlib.sha1(s.encode()).hexdigest()))
 
     def next_in_pool(self, items, start, exclude, fits):
-        """(src, entry, False) for a shuffle group's next airing at `start`, or None. See next_in_item for fits."""
+        """(src, entry, False) for a shuffle group's next airing at `start`, or None. See next_in_item for fits. Nothing
+        that aired in the last REPEAT_DAYS while anything else cached could air (when none of that fits, the slot fills
+        some other way): a rerun, RERUN_HOURS apart at least, only when everything has aired that recently."""
         hour = broadcast_hour(start)[1]
-        recently = time.time() - RERUN_HOURS * 3600
-        loose, choices = [], []
+        files = []
         for src in self._pool_files(items, start):
             e = self.entry(src)
-            if (not e or src in exclude or src in self.reserved or not allowed(src, hour)
-                    or self.aired.get(src, 0) > recently):
-                continue
+            if e and src not in exclude and src not in self.reserved and allowed(src, hour):
+                files.append((src, e))
+        now = time.time()
+        fresh = [(s, e) for s, e in files if self._last_aired(s, e) <= now - REPEAT_DAYS * 86400]
+        loose, choices = [], []
+        for src, e in fresh or [(s, e) for s, e in files if self._last_aired(s, e) <= now - RERUN_HOURS * 3600]:
             if fits is None:
                 loose.append((src, e))
             elif fits(src, e):
@@ -744,6 +764,14 @@ class CacheManager:
         def cached_first(files):
             return sorted(files, key=lambda s: self.entry(s) is None)
 
+        def usual_minutes(item, when):
+            """An item's usual length. The marathon has none of its own: it takes that week's show's, by its folder."""
+            if item == "marathon:":
+                files = self._episodes(item, when)
+                if files and files[0].startswith(MEDIA_ROOT + "/"):
+                    item = "/".join(files[0][len(MEDIA_ROOT) + 1:].split("/")[:2])   # as schedule.item_files names it
+            return usual.get(item, 25)
+
         seen = set()
         for offset in range(SCHEDULE_FILL_DAYS):
             day = today + td(days=offset)
@@ -773,7 +801,7 @@ class CacheManager:
                             left -= min(left, 60)
                             misses = 0
                             continue
-                        minutes = slot_minutes(usual.get(item, 25))
+                        minutes = slot_minutes(usual_minutes(item, when))
                         files = queues.get(item)
                         if files is None:
                             files = self._item_queue(item, when)
@@ -839,6 +867,23 @@ class CacheManager:
         pool = [s for s in self.indexer.holiday_files(season, True) if s not in cached]
         return random.sample(pool, min(len(pool), max(0, HOLIDAY_COMMERCIALS_CACHED - have)))
 
+    def _wanted_features(self):
+        """[(src, pool)]: the ad and the music video the On This Day cards follow themselves with, today and tomorrow
+        (retrotv/onthisday.py's picks), that aren't on the SD card yet."""
+        today = broadcast_date(datetime.datetime.now())
+        want = []
+        for day in (today, today + td(days=1)):
+            picks = screens.on_this_day(day)
+            games = picks.get("games") or []
+            if games and games[0].get("ads"):
+                want.append((games[0]["ads"][0], "commercials"))
+            video = next((n["video"] for n in picks.get("number_ones") or []
+                          if n.get("video") and n["year"] == picks.get("featured_year")), None)
+            if video:
+                want.append((video, "music"))
+        with self.lock:
+            return [(src, pool) for src, pool in dict.fromkeys(want) if src not in self.entries]
+
     def _music_short(self):
         """True (once a day) when fewer than MUSIC_MIN_CACHED unplayed music videos are cached and the
         NAS has more to give."""
@@ -869,7 +914,7 @@ class CacheManager:
                 self.wake.wait(timeout=600)
             hours = self.unplayed_hours()
             if (self.wake.is_set() or hours < REFILL_BELOW_HOURS or self.indexer.is_stale()
-                    or self._wanted_shows() or self._wanted_commercials()):
+                    or self._wanted_shows() or self._wanted_commercials() or self._wanted_features()):
                 self._safe_refill()
             else:
                 logger.info(f"Refill check: {hours:.1f}h of unplayed shows cached, leaving the NAS asleep.")
@@ -896,6 +941,9 @@ class CacheManager:
                 self.indexer.run_indexer()
             for src in self._wanted_commercials():
                 if self._fetch_into_pool(src, "commercials", force=True):
+                    copied += 1
+            for src, pool in self._wanted_features():
+                if self._fetch_into_pool(src, pool, force=True):
                     copied += 1
             # What the schedule airs, soonest first, making room if that means shows it doesn't want go
             wanted = self._wanted_shows()

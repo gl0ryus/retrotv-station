@@ -24,14 +24,10 @@ import time
 import unicodedata
 import wave
 
-from retrotv import cards
-from retrotv.cards import (
-    BAR_RULE, LABEL_INK,
-    ARCHIVO, BARLOW_S, BARLOW_X, BLACK, CREAM, H, HOME_DIR, MUSTARD, ORANGE_RULE, W, WHITE, YELLOW, Card, Script,
-    clip_text, clock, fit, lavfi_url, music, rect, text_width,
-)
+from retrotv import brand, cards
+from retrotv.brand import Part
+from retrotv.cards import H, HOME_DIR, W, Script, clip_text, clock, esc, music, rect
 from retrotv.jsonio import get_json, write_json
-from retrotv.screens import TEXT_FACTOR, wrap
 
 logger = logging.getLogger("RetroTV")
 
@@ -44,11 +40,7 @@ EOM_FILE = music("eas_eom.ogg")              # three short bursts
 VOICE = "kal16"                              # flite's voice closest to a weather radio
 AIRED_DAYS = 7                               # how long an aired alert's id is remembered
 
-EAS_BACKGROUND = "0x0a0a0a"
-EAS_RED = "&H001C1CB4&"
-CRAWL_RED = "&H001A1A9E&"
 CRAWL_SPEED = 110.0     # px/s on the 1024-wide canvas
-CAPS_CHAR = 0.315       # Barlow Condensed ExtraBold caps: average width per character as a fraction of the size, as rendered
 
 # Interrupt the show. A flash flood warning cuts in too when it's a Flash Flood Emergency
 CUT_IN_EVENTS = {
@@ -134,10 +126,6 @@ def _speakable(text):
     text = re.sub(r"\bmph\b", "miles per hour", text, flags=re.I)
     text = text.replace("NWS", "National Weather Service").replace("GL0RYUS", "GLORY US")
     return re.sub(r"\s+", " ", text).strip()
-
-
-def _caps_width(text, size):
-    return len(text) * size * CAPS_CHAR * 1.06
 
 
 def _when(stamp):
@@ -313,30 +301,40 @@ def crawl_text(alerts):
 
 
 def crawl_script(text, label, start):
-    """An ASS file for the vf chain: the alert crawl, built like the NEXT / LATER lower thirds (same bar
-    height, label box, type and underline, sliding in from the left) but red, full width and along the
-    top, with the text crawling under the label from file time `start`. Returns (path, seconds on screen)."""
+    """An ASS file for the vf chain: the guide's emergency crawl, a banner dropping in across the top with hazard
+    stripes above and below it, the warning sign and the label (WEATHER, EMERGENCY, TEST) on the left, the text
+    crawling across red from file time `start`, and G|TV on the right. Returns (path, seconds on screen)."""
     text = clip_text(text.upper(), 600)
-    top, h = 30, 62
-    y = top + h / 2
-    tag = max(150, int(text_width(label, ARCHIVO, 40)) + 48)  # the lower thirds' label box width
-    box = 40 + tag                                             # its label lines up with theirs at x = 62
-    width = _caps_width(text, 46)
-    crawl = (W + 10 - (box - 22) + width) / CRAWL_SPEED
-    lead = 0.6                                                 # the bar slides in before the text starts
+    stripe, bar_h = 10, 84
+    top = stripe
+    y = top + bar_h / 2
+    left = 74 + max(brand.measure(label.upper(), brand.ANTON, 44), brand.measure("ALERT", brand.ARCHIVO_BLACK, 17)) + 26
+    right = W - (brand.measure("G|TV", brand.ANTON, 36) + 44)
+    em = 32.0
+    width = brand.measure(text, brand.ARCHIVO_BLACK, em)
+    crawl = (right - left + width + 20) / CRAWL_SPEED
+    lead = 0.6                                                 # the banner drops in before the text starts
     d = round(lead + crawl + 0.5, 2)
     end = start + d
-
-    def slide(x, yy):
-        return f"\\move({x - W},{yy},{x},{yy},0,450)"
+    drop = (0, 450, 0, top + bar_h + stripe + 20)
+    fade = (0, 300)
     s = Script()
-    s.shape(start, end, 0, top, rect(W, h), CRAWL_RED, fade=(0, 300), layer=1, extra=slide(0, top) + "\\1a&H10&")
-    s.shape(start, end, 0, top, cards.slanted_bar(box, h, 22), MUSTARD, fade=(0, 300), layer=3,
-            extra=slide(0, top))
-    s.shape(start, end, 0, top + h + 2, rect(W, 5), BAR_RULE, fade=(0, 300), layer=2, extra=slide(0, top + h + 2))
-    s.text(start, end, 62, y, label, ARCHIVO, 40, LABEL_INK, align=4, fade=(0, 300), layer=4, extra=slide(62, y))
-    s.text(start, end, 0, y, text, BARLOW_X, 46, CREAM, align=4, fade=None, layer=2,
-           extra=f"\\move({W + 10},{y},{box - 22 - width:.0f},{y},{lead * 1000:.0f},{(lead + crawl) * 1000:.0f})")
+    brand.hazard(s, start, end, 0, stripe, fade=fade, slide=drop, layer=1)
+    brand.hazard(s, start, end, top + bar_h, stripe, fade=fade, slide=drop, layer=1)
+    brand.shape(s, start, end, 0, top, rect(W, bar_h), brand.INK, fade=fade, slide=drop, layer=1)
+    brand.shape(s, start, end, left, top + 6, rect(right - left, bar_h - 12), brand.ALERT_RED, fade=fade, slide=drop,
+                layer=2)
+    brand.shape(s, start, end, 24, y - 20, brand.warning_sign(40, 4), brand.ALERT_PINK, fade=fade, slide=drop, layer=3)
+    brand.words(s, start, end, 74, y - 9, label.upper(), brand.ANTON, 44, brand.ALERT_PINK, fade=fade, slide=drop,
+                layer=3)
+    brand.words(s, start, end, 76, y + 24, "ALERT", brand.ARCHIVO_BLACK, 17, brand.WHITE, spacing=1.5, fade=fade,
+                slide=drop, layer=3)
+    brand.words(s, start, end, right + 22, y, "G|TV", brand.ANTON, 36, brand.YELLOW, fade=fade, slide=drop, layer=3)
+    t_top = y + brand.cap_height(brand.ARCHIVO_BLACK, em) / 2 - brand.ascent(brand.ARCHIVO_BLACK, em)
+    s.raw(start, end, f"\\an7\\move({right + 10:.0f},{t_top:.1f},{left - 10 - width:.0f},{t_top:.1f},{lead * 1000:.0f},"
+                      f"{(lead + crawl) * 1000:.0f})\\clip({left:.0f},{top},{right:.0f},{top + bar_h})"
+                      f"\\fn{brand.ARCHIVO_BLACK}\\fs{brand.fs(brand.ARCHIVO_BLACK, em)}\\c{brand.WHITE}\\bord0\\shad0",
+          esc(text), layer=4)
     return s.write("crawl"), d
 
 
@@ -367,41 +365,55 @@ def render_audio(voice):
 
 
 def bulletin(kind, title, area, until, body, crawl, voice):
-    """The full-screen alert: a red EMERGENCY ALERT SYSTEM band, the alert in big type, the body in
-    pages and a crawl along the bottom, for as long as the tones and voice run."""
+    """The full-screen alert, in the emergency crawl's colours: hazard stripes round a red EMERGENCY ALERT SYSTEM
+    band, the alert in big type with its area and how long it runs, the body in pages and a crawl along the
+    bottom, for as long as the tones and voice run."""
     wav, d = render_audio(voice)
     s = Script()
     fade = (300, 500)
-    # The info screens' header: a band with an orange rule under it, here in alert red
-    s.shape(0, d, 0, 0, rect(W, 112), EAS_RED, fade=fade, layer=0)
-    s.shape(0, d, 0, 112, rect(W, 6), ORANGE_RULE, fade=fade, layer=0)
-    s.text(0.2, d, 512, 56, "EMERGENCY ALERT SYSTEM", ARCHIVO, 50, CREAM, shadow=4, shadow_color=BLACK,
-           slant=-0.15, fade=fade)
-    title = clip_text(title.upper(), 30)
-    s.text(0.6, d, 512, 192, title, ARCHIVO, fit(title, ARCHIVO, 78, 940), YELLOW, shadow=6, slant=-0.15, fade=fade)
-    area = clip_text(area.upper(), 70)
-    s.text(1.0, d, 512, 266, area, BARLOW_X, fit(area, BARLOW_X, 44, 940), CREAM, fade=fade)
+    brand.hazard(s, 0, d, 0, 12, fade=fade, layer=1)
+    brand.shape(s, 0, d, 0, 12, rect(W, 88), brand.ALERT_RED, fade=fade, layer=1)
+    brand.hazard(s, 0, d, 100, 12, fade=fade, layer=1)
+    head = "EMERGENCY ALERT SYSTEM"
+    hw = brand.measure(head, brand.ANTON, 50) + 66
+    brand.shape(s, 0.2, d, W / 2 - hw / 2, 34, brand.warning_sign(46, 5), brand.WHITE, fade=fade, layer=3)
+    brand.words(s, 0.2, d, W / 2 - hw / 2 + 66, 56, head, brand.ANTON, 50, brand.WHITE, fade=fade, layer=3)
+    title = title.upper()
+    em = brand.shrink(title, brand.ANTON, 70, 900)
+    brand.words(s, 0.6, d, W / 2, 178, brand.clip(title, brand.ANTON, em, 900), brand.ANTON, em, brand.YELLOW,
+                align="center", shadow=(6, 6, brand.ALERT_RED), fade=fade)
+    brand.words(s, 1.0, d, W / 2, 240, brand.clip(area.upper(), brand.ARCHIVO_BLACK, 24, 900), brand.ARCHIVO_BLACK, 24,
+                brand.WHITE, align="center", fade=fade)
     if until:
-        s.text(1.2, d, 512, 318, until.upper(), BARLOW_X, 40, MUSTARD, spacing=6, fade=fade)
-    lines = wrap(body, BARLOW_S, 36, 900, max_lines=12)
-    pages = [lines[i:i + 3] for i in range(0, len(lines), 3)]
+        until = until.upper()
+        uw = brand.measure(until, brand.ARCHIVO_BLACK, 21) + 36
+        brand.strip(s, 1.2, d, W / 2 - uw / 2, 270, 36, [Part(until, brand.ARCHIVO_BLACK, 21, brand.INK, brand.ALERT_PINK,
+                                                              pad=18)], shadow=(5, 5, brand.ALERT_RED), fade=fade)
+    text = brand.lines(body, brand.ARCHIVO, 25, 900)[:12]
+    pages = [text[i:i + 3] for i in range(0, len(text), 3)]
     span = (d - 1.6) / max(1, len(pages))
     for p, page in enumerate(pages):
         a, b = 1.6 + p * span, 1.6 + (p + 1) * span
         for i, line in enumerate(page):
-            s.text(a, b, 512, 380 + i * 42, line, BARLOW_S, 36, WHITE, fade=(250, 250))
+            brand.words(s, a, b, W / 2, 362 + i * 42, line, brand.ARCHIVO, 25, brand.WHITE, align="center", bold=True,
+                        fade=(250, 250))
     if crawl:
-        # The weather screen's ticker: same type and speed, one pass, cut short to fit the bulletin
-        width = len(crawl) * 38 * TEXT_FACTOR[BARLOW_S] * 1.05
+        # The emergency crawl's bar along the bottom: one pass, cut short to fit the bulletin
+        em, speed = 26.0, 120.0
+        crawl = crawl.upper()
+        width = brand.measure(crawl, brand.ARCHIVO_BLACK, em)
+        if (W + 10 + width) / speed > d - 1.5:
+            crawl = brand.clip(crawl, brand.ARCHIVO_BLACK, em, (d - 1.5) * speed - W - 10)
+            width = brand.measure(crawl, brand.ARCHIVO_BLACK, em)
         travel = W + 10 + width
-        if travel / 120.0 > d - 1.5:
-            crawl = clip_text(crawl, int(len(crawl) * ((d - 1.5) * 120.0 - W - 10) / width))
-            width = len(crawl) * 38 * TEXT_FACTOR[BARLOW_S] * 1.05
-            travel = W + 10 + width
-        s.shape(0.8, d, 0, 500, rect(W, H - 500), CRAWL_RED, fade=fade, layer=1)
-        s.text(1.0, d, 0, 546, crawl, BARLOW_S, 38, WHITE, align=4, fade=None, layer=2,
-               extra=f"\\move({W + 10},546,{-10 - width:.0f},546,0,{travel / 120.0 * 1000:.0f})")
-    return s.card(kind, d, wav, background=EAS_BACKGROUND, fade_out=False, card_kind=kind)
+        brand.hazard(s, 0.8, d, 512, 10, fade=fade, layer=1)
+        brand.shape(s, 0.8, d, 0, 522, rect(W, H - 522), brand.ALERT_RED, fade=fade, layer=1)
+        y = 561
+        t_top = y + brand.cap_height(brand.ARCHIVO_BLACK, em) / 2 - brand.ascent(brand.ARCHIVO_BLACK, em)
+        s.raw(1.0, d, f"\\an7\\move({W + 10},{t_top:.1f},{-10 - width:.0f},{t_top:.1f},0,{travel / speed * 1000:.0f})"
+                      f"\\fn{brand.ARCHIVO_BLACK}\\fs{brand.fs(brand.ARCHIVO_BLACK, em)}\\c{brand.WHITE}\\bord0\\shad0",
+              esc(crawl), layer=2)
+    return s.card(kind, d, wav, background=brand.INK_BG, fade_out=False, card_kind=kind)
 
 
 def cut_in_card(alert):

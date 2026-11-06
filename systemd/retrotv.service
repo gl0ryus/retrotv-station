@@ -1,0 +1,20 @@
+[Unit]
+Description=Retro TV station (mpv playout on HDMI, media cached from the NAS)
+Wants=network-online.target mnt-tower.mount
+After=network-online.target mnt-tower.mount
+# Keep retrying instead of giving up after 5 starts
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=gl0ryus
+WorkingDirectory=/home/gl0ryus
+Environment=PYTHONUNBUFFERED=1
+# The release deploy.py put on the SD card, so the station starts without the NAS (retries via Restart=)
+ExecStartPre=/usr/bin/test -f /home/gl0ryus/retrotv_station/current/retro_station.py
+ExecStart=/usr/bin/python3 /home/gl0ryus/retrotv_station/current/retro_station.py
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
